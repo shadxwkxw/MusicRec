@@ -1,0 +1,36 @@
+services:
+  recommender-online:
+    build:
+      context: .
+      dockerfile: services/online/Dockerfile
+    container_name: recommender-online
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./services:/app/services
+      - ./configs:/app/configs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src:/app
+    command: uvicorn recommender.interfaces.online.main:app --host 0.0.0.0 --port 8000 --reload
+
+  recommender-batch:
+    build:
+      context: .
+      dockerfile: services/batch/Dockerfile
+    container_name: recommender-batch
+    profiles: ["batch"]
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./services:/app/services
+      - ./configs:/app/configs
+      - ./artifacts:/app/artifacts
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src:/app
+    # Команда передаётся через docker compose run:
+    # docker compose --profile batch run --rm recommender-batch extract --input-dir /app/data/audio
+    # docker compose --profile batch run --rm recommender-batch recommend --output /app/artifacts/recs.parquet

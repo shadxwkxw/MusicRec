@@ -1,0 +1,35 @@
+.DS_Store
+
+# PyCharm / JetBrains
+.idea/
+*.iml
+out/
+
+.venv
+
+# Python cache and virtual envs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.pycache_local/
+.pycache_tmp
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Datasets and ML artifacts
+data
+*.pq
+*.parquet
+artifacts/tmp_preprocessed/
+artifacts/baselines/
+models/
+
+music
+newmusic

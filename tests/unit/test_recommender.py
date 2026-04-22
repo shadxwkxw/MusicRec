@@ -1,0 +1,172 @@
+"""Unit-тесты рекомендера.
+
+Запуск: pytest tests/ -v
+"""
+
+import numpy as np
+import pytest
+
+from recommender.domain.models import Recommendation
+from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
+from recommender.infrastructure.storage.faiss_index import FaissRecommender
+
+
+class TestFeatureNormalizer:
+    def test_standard_normalization(self):
+        data = np.random.randn(20, 58).astype(np.float32)
+        norm = FeatureNormalizer("standard")
+        result = norm.fit_transform(data)
+
+        assert result.shape == data.shape
+        np.testing.assert_allclose(result.mean(axis=0), 0, atol=1e-6)
+        np.testing.assert_allclose(result.std(axis=0), 1, atol=1e-6)
+
+    def test_minmax_normalization(self):
+        data = np.random.randn(20, 58).astype(np.float32)
+        norm = FeatureNormalizer("minmax")
+        result = norm.fit_transform(data)
+
+        # float32 MinMax может давать 1.0000001 из-за округления — допускаем epsilon
+        assert result.min() >= -1e-5
+        assert result.max() <= 1.0 + 1e-5
+
+    def test_robust_normalization(self):
+        data = np.random.randn(20, 58).astype(np.float32)
+        norm = FeatureNormalizer("robust")
+        result = norm.fit_transform(data)
+        assert result.shape == data.shape
+
+    def test_single_vector_transform(self):
+        data = np.random.randn(20, 58).astype(np.float32)
+        norm = FeatureNormalizer("standard")
+        norm.fit(data)
+
+        single = data[0]
+        result = norm.transform(single)
+        assert result.shape == (1, 58)
+
+    def test_unfitted_raises(self):
+        norm = FeatureNormalizer("standard")
+        with pytest.raises(RuntimeError):
+            norm.transform(np.zeros(58))
+
+    def test_invalid_method(self):
+        with pytest.raises(ValueError):
+            FeatureNormalizer("invalid")
+
+    def test_save_load(self, tmp_path):
+        data = np.random.randn(20, 58).astype(np.float32)
+        norm = FeatureNormalizer("standard")
+        norm.fit(data)
+
+        path = tmp_path / "normalizer.joblib"
+        norm.save(path)
+        loaded = FeatureNormalizer.load(path)
+
+        original = norm.transform(data[0])
+        restored = loaded.transform(data[0])
+        np.testing.assert_allclose(original, restored)
+
+
+class TestFaissRecommender:
+    def _make_engine(self, n_tracks=50, dim=58):
+        engine = FaissRecommender(dimension=dim, metric="cosine")
+        ids = [f"track_{i}" for i in range(n_tracks)]
+        features = np.random.randn(n_tracks, dim).astype(np.float32)
+        engine.add_tracks(ids, features)
+        return engine, ids, features
+
+    def test_add_and_search(self):
+        engine, _ids, features = self._make_engine()
+        assert engine.index.ntotal == 50
+
+        recs = engine.recommend(features[0], limit=5, exclude_ids={"track_0"})
+        assert len(recs) == 5
+        assert all(isinstance(r, Recommendation) for r in recs)
+        assert all(r.track_id != "track_0" for r in recs)
+
+    def test_self_is_most_similar(self):
+        engine, _ids, features = self._make_engine()
+        recs = engine.recommend(features[0], limit=1)
+        assert recs[0].track_id == "track_0"
+
+    def test_exclude_ids(self):
+        engine, _ids, features = self._make_engine()
+        exclude = {"track_0", "track_1", "track_2"}
+        recs = engine.recommend(features[0], limit=5, exclude_ids=exclude)
+        rec_ids = {r.track_id for r in recs}
+        assert rec_ids.isdisjoint(exclude)
+
+    def test_like_boost(self):
+        engine, _ids, features = self._make_engine()
+        boost = {"track_49": 100.0}
+        recs = engine.recommend(
+            features[0], limit=5, exclude_ids={"track_0"}, like_boost=boost
+        )
+        assert recs[0].track_id == "track_49"
+
+    def test_empty_index(self):
+        engine = FaissRecommender(dimension=58)
+        recs = engine.recommend(np.zeros(58), limit=5)
+        assert recs == []
+
+    def test_rebuild(self):
+        engine, _ids, _features = self._make_engine(n_tracks=20)
+        assert engine.index.ntotal == 20
+
+        new_ids = [f"new_{i}" for i in range(10)]
+        new_features = np.random.randn(10, 58).astype(np.float32)
+        engine.rebuild(new_ids, new_features)
+        assert engine.index.ntotal == 10
+        assert len(engine.track_ids) == 10
+
+    def test_save_load(self, tmp_path):
+        engine, _ids, features = self._make_engine()
+        engine.save(tmp_path)
+        loaded = FaissRecommender.load(tmp_path)
+
+        assert loaded.index.ntotal == engine.index.ntotal
+        assert loaded.track_ids == engine.track_ids
+
+        recs_original = engine.recommend(features[0], limit=5)
+        recs_loaded = loaded.recommend(features[0], limit=5)
+        assert recs_original == recs_loaded
+
+    def test_euclidean_metric(self):
+        engine = FaissRecommender(dimension=58, metric="euclidean")
+        ids = [f"track_{i}" for i in range(20)]
+        features = np.random.randn(20, 58).astype(np.float32)
+        engine.add_tracks(ids, features)
+
+        recs = engine.recommend(features[0], limit=5)
+        assert len(recs) == 5
+        # Для L2 меньше дистанция = ближе, сортировка по возрастанию
+        scores = [r.score for r in recs]
+        assert scores == sorted(scores)
+
+
+class TestFeatureGroups:
+    def test_apply_weights(self):
+        from recommender.application.training.tune_recommender import (
+            FEATURE_GROUPS,
+            apply_feature_weights,
+        )
+
+        features = np.ones((5, 82), dtype=np.float32)
+        weights = {name: 2.0 for name in FEATURE_GROUPS}
+        weighted = apply_feature_weights(features, weights)
+        np.testing.assert_allclose(weighted, 2.0)
+
+    def test_zero_weight_kills_group(self):
+        from recommender.application.training.tune_recommender import (
+            FEATURE_GROUPS,
+            apply_feature_weights,
+        )
+
+        features = np.ones((5, 82), dtype=np.float32)
+        weights = {name: 1.0 for name in FEATURE_GROUPS}
+        weights["mfcc"] = 0.0
+        weighted = apply_feature_weights(features, weights)
+
+        np.testing.assert_allclose(weighted[:, 0:26], 0.0)
+        np.testing.assert_allclose(weighted[:, 26:], 1.0)

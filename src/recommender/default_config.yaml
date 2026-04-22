@@ -1,0 +1,30 @@
+project:
+  name: music-recommender
+
+paths:
+  data_dir: data
+  audio_dir: data/audio
+  index_dir: data/index
+  models_dir: data/models
+
+database:
+  url: ${DB_URL:-sqlite+aiosqlite:///data/recommender.db}
+
+audio:
+  sample_rate: 22050
+  duration_limit: 120.0    # analyse first N seconds
+  n_mfcc: 13
+  n_chroma: 12
+  n_contrast_bands: 6    # librosa требует fmin*2^n_bands < sr/2; при sr=22050 максимум 6
+
+recommendation:
+  default_limit: 10
+  faiss_nprobe: 10
+
+tuning:
+  n_trials: 50
+  timeout: 600             # Optuna timeout, seconds
+
+api:
+  host: 0.0.0.0
+  port: 8000
