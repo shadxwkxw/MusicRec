@@ -68,6 +68,33 @@ class TestFeatureNormalizer:
         np.testing.assert_allclose(original, restored)
 
 
+class TestWeightedNormalizer:
+    def test_weights_survive_save_load(self, tmp_path):
+        data = np.random.randn(20, 82).astype(np.float32)
+        weights = np.linspace(0.5, 3.0, 82, dtype=np.float32)
+        norm = FeatureNormalizer("minmax", weights=weights).fit(data)
+
+        path = tmp_path / "normalizer.joblib"
+        norm.save(path)
+        loaded = FeatureNormalizer.load(path)
+
+        np.testing.assert_allclose(loaded.weights, weights)
+        np.testing.assert_allclose(loaded.transform(data[0]), norm.transform(data[0]))
+
+    def test_raw_query_lands_on_itself(self):
+        data = np.random.randn(30, 82).astype(np.float32)
+        weights = np.linspace(0.5, 3.0, 82, dtype=np.float32)
+        norm = FeatureNormalizer("minmax", weights=weights)
+        normalized = norm.fit_transform(data)
+
+        engine = FaissRecommender(dimension=82, metric="euclidean")
+        engine.add_tracks([f"t{i}" for i in range(30)], normalized.copy())
+
+        recs = engine.recommend(norm.transform(data[5]).flatten(), limit=1)
+        assert recs[0].track_id == "t5"
+        assert recs[0].score == pytest.approx(0.0, abs=1e-4)
+
+
 class TestFaissRecommender:
     def _make_engine(self, n_tracks=50, dim=58):
         engine = FaissRecommender(dimension=dim, metric="cosine")

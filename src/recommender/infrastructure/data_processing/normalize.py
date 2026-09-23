@@ -1,4 +1,9 @@
-"""Нормализация признаков — обёртка над sklearn-скейлерами с save/load."""
+"""Нормализация признаков — обёртка над sklearn-скейлерами с save/load.
+
+Опционально хранит per-dimension веса признаков (подобранные тюнингом):
+они применяются к сырому вектору до скейлера и сохраняются вместе с ним,
+поэтому любой transform() даёт вектор в том же пространстве, что и индекс.
+"""
 
 from pathlib import Path
 
@@ -19,12 +24,13 @@ SCALER_CLASSES = {
 class FeatureNormalizer:
     """Обёртка над sklearn-скейлерами с сохранением/загрузкой."""
 
-    def __init__(self, method: str = "standard"):
+    def __init__(self, method: str = "standard", weights: np.ndarray | None = None):
         if method not in SCALER_CLASSES:
             raise ValueError(
                 f"Unknown method: {method}. Choose from {list(SCALER_CLASSES)}"
             )
         self.method = method
+        self.weights = None if weights is None else np.asarray(weights, dtype=np.float32)
         self.scaler = SCALER_CLASSES[method]()
         self._fitted = False
 
@@ -33,19 +39,22 @@ class FeatureNormalizer:
         """Обучен ли нормализатор."""
         return self._fitted
 
+    def _weigh(self, features: np.ndarray) -> np.ndarray:
+        return features if self.weights is None else features * self.weights
+
     def fit(self, features: np.ndarray) -> "FeatureNormalizer":
-        """Обучить на матрице (n_tracks, n_features)."""
-        self.scaler.fit(features)
+        """Обучить на матрице сырых признаков (n_tracks, n_features)."""
+        self.scaler.fit(self._weigh(features))
         self._fitted = True
         return self
 
     def transform(self, features: np.ndarray) -> np.ndarray:
-        """Нормализовать признаки. Принимает 1D (один трек) или 2D."""
+        """Нормализовать сырые признаки. Принимает 1D (один трек) или 2D."""
         if not self._fitted:
             raise RuntimeError("Normalizer not fitted yet. Call fit() first.")
         if features.ndim == 1:
             features = features.reshape(1, -1)
-        return self.scaler.transform(features)
+        return self.scaler.transform(self._weigh(features))
 
     def fit_transform(self, features: np.ndarray) -> np.ndarray:
         self.fit(features)
@@ -53,13 +62,13 @@ class FeatureNormalizer:
 
     def save(self, path: Path | None = None) -> None:
         path = path or (settings.models_dir / "normalizer.joblib")
-        dump({"method": self.method, "scaler": self.scaler}, path)
+        dump({"method": self.method, "scaler": self.scaler, "weights": self.weights}, path)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "FeatureNormalizer":
         path = path or (settings.models_dir / "normalizer.joblib")
         data = load(path)
-        normalizer = cls(method=data["method"])
+        normalizer = cls(method=data["method"], weights=data.get("weights"))
         normalizer.scaler = data["scaler"]
         normalizer._fitted = True
         return normalizer

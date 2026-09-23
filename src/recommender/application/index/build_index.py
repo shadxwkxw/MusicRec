@@ -1,7 +1,9 @@
 """Use case: полная пересборка FAISS-индекса из БД.
 
-Берёт все треки с фичами, заново фитит нормализатор (standard scaler) и
-строит новый FAISS-индекс. Артефакты сохраняются на диск.
+Берёт все треки с фичами, заново фитит нормализатор и строит новый
+FAISS-индекс. Метод нормализации, веса признаков и метрика берутся из
+сохранённых артефактов (результат тюнинга); если их нет — standard + cosine.
+Артефакты сохраняются на диск.
 """
 
 from dataclasses import dataclass
@@ -28,6 +30,20 @@ class BuildIndexResult:
     feature_dim: int
 
 
+def _saved_params() -> tuple[str, np.ndarray | None, str]:
+    """Параметры из сохранённых артефактов, иначе дефолты."""
+    try:
+        prev_norm = FeatureNormalizer.load()
+        method, weights = prev_norm.method, prev_norm.weights
+    except FileNotFoundError:
+        method, weights = "standard", None
+    try:
+        metric = FaissRecommender.load().metric
+    except FileNotFoundError:
+        metric = "cosine"
+    return method, weights, metric
+
+
 async def rebuild_index(db: AsyncSession) -> BuildIndexResult:
     """Пересобрать индекс и нормализатор из всех треков БД.
 
@@ -45,11 +61,13 @@ async def rebuild_index(db: AsyncSession) -> BuildIndexResult:
     track_ids = [t.id for t in tracks]
     features = np.array([bytes_to_features(t.feature_vector) for t in tracks])
 
-    normalizer = FeatureNormalizer(method="standard")
+    method, weights, metric = _saved_params()
+
+    normalizer = FeatureNormalizer(method=method, weights=weights)
     normalized = normalizer.fit_transform(features)
     normalizer.save()
 
-    engine = FaissRecommender(dimension=normalized.shape[1])
+    engine = FaissRecommender(dimension=normalized.shape[1], metric=metric)
     engine.rebuild(track_ids, normalized)
     engine.save()
 

@@ -42,15 +42,20 @@ FEATURE_GROUPS = {
 }
 
 
+def feature_weight_vector(weights: dict[str, float]) -> np.ndarray:
+    """Развернуть групповые веса в per-dimension вектор."""
+    dim = max(end for _, end in FEATURE_GROUPS.values())
+    vec = np.ones(dim, dtype=np.float32)
+    for group_name, (start, end) in FEATURE_GROUPS.items():
+        vec[start:end] = weights.get(group_name, 1.0)
+    return vec
+
+
 def apply_feature_weights(
     features: np.ndarray, weights: dict[str, float]
 ) -> np.ndarray:
     """Применить групповые веса к матрице признаков."""
-    weighted = features.copy()
-    for group_name, (start, end) in FEATURE_GROUPS.items():
-        w = weights.get(group_name, 1.0)
-        weighted[:, start:end] *= w
-    return weighted
+    return features * feature_weight_vector(weights)
 
 
 async def run_tuning(db: AsyncSession, run_id: int) -> dict:
@@ -102,10 +107,10 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
             for group_name in FEATURE_GROUPS
         }
 
-        weighted = apply_feature_weights(raw_features, weights)
-
-        normalizer = FeatureNormalizer(method=norm_method)
-        normalized = normalizer.fit_transform(weighted)
+        normalizer = FeatureNormalizer(
+            method=norm_method, weights=feature_weight_vector(weights)
+        )
+        normalized = normalizer.fit_transform(raw_features)
 
         engine = FaissRecommender(dimension=normalized.shape[1], metric=metric)
         engine.add_tracks(track_ids, normalized.copy())
@@ -148,9 +153,10 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
 
     # Пересобрать индекс с лучшими параметрами
     weights = {g: best.get(f"w_{g}", 1.0) for g in FEATURE_GROUPS}
-    weighted = apply_feature_weights(raw_features, weights)
-    normalizer = FeatureNormalizer(method=best["norm_method"])
-    normalized = normalizer.fit_transform(weighted)
+    normalizer = FeatureNormalizer(
+        method=best["norm_method"], weights=feature_weight_vector(weights)
+    )
+    normalized = normalizer.fit_transform(raw_features)
     normalizer.save()
 
     engine = FaissRecommender(dimension=normalized.shape[1], metric=best["metric"])
