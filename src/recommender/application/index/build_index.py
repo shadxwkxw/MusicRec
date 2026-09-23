@@ -30,7 +30,7 @@ class BuildIndexResult:
     feature_dim: int
 
 
-def _saved_params() -> tuple[str, np.ndarray | None, str]:
+def _saved_params() -> tuple[str, np.ndarray | None, str, float]:
     """Параметры из сохранённых артефактов, иначе дефолты."""
     try:
         prev_norm = FeatureNormalizer.load()
@@ -38,10 +38,11 @@ def _saved_params() -> tuple[str, np.ndarray | None, str]:
     except FileNotFoundError:
         method, weights = "standard", None
     try:
-        metric = FaissRecommender.load().metric
+        prev_engine = FaissRecommender.load()
+        metric, boost_weight = prev_engine.metric, prev_engine.boost_weight
     except FileNotFoundError:
-        metric = "cosine"
-    return method, weights, metric
+        metric, boost_weight = "cosine", 0.3
+    return method, weights, metric, boost_weight
 
 
 async def rebuild_index(db: AsyncSession) -> BuildIndexResult:
@@ -61,13 +62,15 @@ async def rebuild_index(db: AsyncSession) -> BuildIndexResult:
     track_ids = [t.id for t in tracks]
     features = np.array([bytes_to_features(t.feature_vector) for t in tracks])
 
-    method, weights, metric = _saved_params()
+    method, weights, metric, boost_weight = _saved_params()
 
     normalizer = FeatureNormalizer(method=method, weights=weights)
     normalized = normalizer.fit_transform(features)
     normalizer.save()
 
-    engine = FaissRecommender(dimension=normalized.shape[1], metric=metric)
+    engine = FaissRecommender(
+        dimension=normalized.shape[1], metric=metric, boost_weight=boost_weight
+    )
     engine.rebuild(track_ids, normalized)
     engine.save()
 

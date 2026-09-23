@@ -132,6 +132,30 @@ class TestFaissRecommender:
         )
         assert recs[0].track_id == "track_49"
 
+    @pytest.mark.parametrize("metric", ["cosine", "euclidean"])
+    def test_boost_moves_track_up(self, metric):
+        # Вес заведомо больше любого разрыва между скорами (L2 в FAISS —
+        # квадрат расстояния, разрывы в единицы): при верном знаке трек
+        # уходит на первое место, при неверном — на последнее.
+        engine = FaissRecommender(dimension=58, metric=metric, boost_weight=1e6)
+        ids = [f"track_{i}" for i in range(30)]
+        features = np.random.default_rng(0).standard_normal((30, 58)).astype(np.float32)
+        engine.add_tracks(ids, features.copy())
+
+        plain = engine.recommend(features[0], limit=29, exclude_ids={"track_0"})
+        target = plain[10].track_id
+        boosted = engine.recommend(
+            features[0], limit=29, exclude_ids={"track_0"}, like_boost={target: 1.0}
+        )
+
+        assert boosted[0].track_id == target
+
+    def test_boost_weight_survives_save_load(self, tmp_path):
+        engine = FaissRecommender(dimension=58, metric="euclidean", boost_weight=0.17)
+        engine.add_tracks(["a"], np.random.randn(1, 58).astype(np.float32))
+        engine.save(tmp_path)
+        assert FaissRecommender.load(tmp_path).boost_weight == pytest.approx(0.17)
+
     def test_remove_tracks_keeps_positions_aligned(self):
         engine, ids, features = self._make_engine(n_tracks=20)
         removed = engine.remove_tracks({"track_3", "track_10", "missing"})
@@ -180,6 +204,19 @@ class TestFaissRecommender:
         # Для L2 меньше дистанция = ближе, сортировка по возрастанию
         scores = [r.score for r in recs]
         assert scores == sorted(scores)
+
+
+class TestCoLikeStrength:
+    def test_counts_shared_likes(self):
+        from recommender.application.collaborative import co_like_strength
+
+        likes = {"u1": {"a", "b", "c"}, "u2": {"a", "b"}, "u3": {"c", "d"}}
+        assert co_like_strength("a", likes) == {"b": 1.0, "c": 0.5}
+
+    def test_no_fans_gives_empty(self):
+        from recommender.application.collaborative import co_like_strength
+
+        assert co_like_strength("x", {"u1": {"a", "b"}}) == {}
 
 
 class TestFeatureGroups:

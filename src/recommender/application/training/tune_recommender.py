@@ -22,6 +22,7 @@ import optuna
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from recommender.application.collaborative import co_like_strength
 from recommender.config import settings
 from recommender.infrastructure.data_processing.extract import bytes_to_features
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
@@ -80,6 +81,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     user_tracks: dict[str, list[str]] = {}
     for like in likes:
         user_tracks.setdefault(like.user_id, []).append(like.track_id)
+    user_likes = {uid: set(tids) for uid, tids in user_tracks.items()}
 
     # Только пользователи с >=2 лайками (для leave-one-out)
     eval_users = {
@@ -100,7 +102,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
             "norm_method", ["standard", "minmax", "robust"]
         )
         metric = trial.suggest_categorical("metric", ["cosine", "euclidean"])
-        boost_weight = trial.suggest_float("boost_weight", 0.0, 1.0)  # noqa: F841
+        boost_weight = trial.suggest_float("boost_weight", 0.0, 3.0)
 
         weights = {
             group_name: trial.suggest_float(f"w_{group_name}", 0.0, 3.0)
@@ -112,7 +114,9 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
         )
         normalized = normalizer.fit_transform(raw_features)
 
-        engine = FaissRecommender(dimension=normalized.shape[1], metric=metric)
+        engine = FaissRecommender(
+            dimension=normalized.shape[1], metric=metric, boost_weight=boost_weight
+        )
         engine.add_tracks(track_ids, normalized.copy())
 
         # leave-one-out hit rate
@@ -126,8 +130,19 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
                 query_idx = id_to_idx[query_tids[0]]
                 query_vec = normalized[query_idx]
 
+                # Спрятанный лайк убираем и из co-like сигнала, иначе буст
+                # подсказывает ответ и hit-rate завышается.
+                visible_likes = {
+                    u: (tids - {held_out} if u == uid else tids)
+                    for u, tids in user_likes.items()
+                }
+                boost = co_like_strength(query_tids[0], visible_likes)
+
                 recs = engine.recommend(
-                    query_vec, limit=20, exclude_ids={query_tids[0]}
+                    query_vec,
+                    limit=20,
+                    exclude_ids={query_tids[0]},
+                    like_boost=boost or None,
                 )
                 rec_ids = {r.track_id for r in recs}
                 if held_out in rec_ids:
@@ -159,7 +174,11 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     normalized = normalizer.fit_transform(raw_features)
     normalizer.save()
 
-    engine = FaissRecommender(dimension=normalized.shape[1], metric=best["metric"])
+    engine = FaissRecommender(
+        dimension=normalized.shape[1],
+        metric=best["metric"],
+        boost_weight=best["boost_weight"],
+    )
     engine.add_tracks(track_ids, normalized.copy())
     engine.save()
 

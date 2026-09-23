@@ -37,7 +37,8 @@ class Recommender(ABC):
             query_features: вектор признаков запроса (dimension,)
             limit: сколько рекомендаций вернуть
             exclude_ids: треки, которые нужно исключить (обычно сам query)
-            like_boost: {track_id: boost_score} — коллаборативная надбавка
+            like_boost: {track_id: сила co-like сигнала в [0, 1]}; вес и
+                направление надбавки определяет реализация
         """
 
     @abstractmethod

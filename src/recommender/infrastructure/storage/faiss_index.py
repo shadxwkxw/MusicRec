@@ -20,9 +20,15 @@ from recommender.domain.recommender import Recommender
 class FaissRecommender(Recommender):
     """FAISS-индекс ближайших соседей."""
 
-    def __init__(self, dimension: int | None = None, metric: str = "cosine"):
+    def __init__(
+        self,
+        dimension: int | None = None,
+        metric: str = "cosine",
+        boost_weight: float = 0.3,
+    ):
         self.dimension = dimension or settings.feature_dim
         self.metric = metric
+        self.boost_weight = boost_weight
         self.index: faiss.IndexFlat | None = None
         self.track_ids: list[str] = []
         self._build_index()
@@ -79,7 +85,9 @@ class FaissRecommender(Recommender):
 
             score = float(dist)
             if like_boost and track_id in like_boost:
-                score += like_boost[track_id]
+                bonus = like_boost[track_id] * self.boost_weight
+                # cosine: больше = ближе, L2: меньше = ближе
+                score = score + bonus if self.metric == "cosine" else score - bonus
 
             results.append(Recommendation(track_id=track_id, score=score))
 
@@ -107,7 +115,12 @@ class FaissRecommender(Recommender):
         path = path or settings.index_dir
         faiss.write_index(self.index, str(path / "faiss.index"))
         dump(
-            {"track_ids": self.track_ids, "metric": self.metric, "dim": self.dimension},
+            {
+                "track_ids": self.track_ids,
+                "metric": self.metric,
+                "dim": self.dimension,
+                "boost_weight": self.boost_weight,
+            },
             path / "meta.joblib",
         )
 
@@ -115,7 +128,11 @@ class FaissRecommender(Recommender):
     def load(cls, path: Path | None = None) -> "FaissRecommender":
         path = path or settings.index_dir
         meta = load(path / "meta.joblib")
-        engine = cls(dimension=meta["dim"], metric=meta["metric"])
+        engine = cls(
+            dimension=meta["dim"],
+            metric=meta["metric"],
+            boost_weight=meta.get("boost_weight", 0.3),
+        )
         engine.index = faiss.read_index(str(path / "faiss.index"))
         engine.track_ids = meta["track_ids"]
         return engine
