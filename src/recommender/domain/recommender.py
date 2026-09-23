@@ -41,5 +41,9 @@ class Recommender(ABC):
         """
 
     @abstractmethod
+    def remove_tracks(self, track_ids: set[str]) -> int:
+        """Удалить треки из индекса. Возвращает число удалённых."""
+
+    @abstractmethod
     def rebuild(self, track_ids: list[str], features: np.ndarray) -> None:
         """Полностью пересобрать индекс из новых треков."""

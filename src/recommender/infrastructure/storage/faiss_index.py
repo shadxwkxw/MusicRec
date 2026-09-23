@@ -87,6 +87,17 @@ class FaissRecommender(Recommender):
         results.sort(key=lambda r: r.score, reverse=(self.metric == "cosine"))
         return results[:limit]
 
+    def remove_tracks(self, track_ids: set[str]) -> int:
+        positions = [i for i, tid in enumerate(self.track_ids) if tid in track_ids]
+        if not positions:
+            return 0
+        # IndexFlat.remove_ids сдвигает оставшиеся векторы с сохранением порядка,
+        # поэтому track_ids фильтруется тем же способом, чтобы позиции совпадали.
+        self.index.remove_ids(np.array(positions, dtype=np.int64))
+        removed = set(positions)
+        self.track_ids = [tid for i, tid in enumerate(self.track_ids) if i not in removed]
+        return len(positions)
+
     def rebuild(self, track_ids: list[str], features: np.ndarray) -> None:
         self._build_index()
         self.track_ids = []

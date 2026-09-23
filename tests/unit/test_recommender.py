@@ -132,6 +132,16 @@ class TestFaissRecommender:
         )
         assert recs[0].track_id == "track_49"
 
+    def test_remove_tracks_keeps_positions_aligned(self):
+        engine, ids, features = self._make_engine(n_tracks=20)
+        removed = engine.remove_tracks({"track_3", "track_10", "missing"})
+
+        assert removed == 2
+        assert engine.index.ntotal == 18
+        assert "track_3" not in engine.track_ids
+        for i in (0, 4, 11, 19):
+            assert engine.recommend(features[i], limit=1)[0].track_id == ids[i]
+
     def test_empty_index(self):
         engine = FaissRecommender(dimension=58)
         recs = engine.recommend(np.zeros(58), limit=5)

@@ -18,7 +18,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from recommender.application.index.build_index import NoTracksError, rebuild_index
@@ -51,6 +51,7 @@ from recommender.interfaces.online.schemas import (
     RecommendationResponse,
     TrackFeaturesResponse,
     TrackResponse,
+    TrackUpdate,
 )
 
 
@@ -114,6 +115,7 @@ async def upload_track(
     if indexed:
         norm_features = normalizer.transform(features)
         engine.add_tracks([track_id], norm_features)
+        engine.save()
 
     return TrackResponse(
         id=track_id,
@@ -125,8 +127,20 @@ async def upload_track(
     )
 
 
+def _to_response(track: TrackORM, indexed_ids: set[str]) -> TrackResponse:
+    return TrackResponse(
+        id=track.id,
+        title=track.title,
+        artist=track.artist,
+        duration=track.duration,
+        created_at=track.created_at,
+        indexed=track.id in indexed_ids,
+    )
+
+
 @router.get("/tracks", response_model=list[TrackResponse])
 async def get_all_tracks(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -137,22 +151,50 @@ async def get_all_tracks(
         .limit(limit)
         .offset(offset)
     )
+    indexed_ids = set(_engine(request).track_ids)
+    return [_to_response(t, indexed_ids) for t in result.scalars().all()]
 
-    tracks = result.scalars().all()
 
-    return [
-        TrackResponse(
-            id=t.id,
-            title=t.title,
-            artist=t.artist,
-            duration=t.duration,
-            created_at=t.created_at,
-            indexed=False,
-        )
-        for t in tracks
-    ]
-    
-    
+@router.patch("/tracks/{track_id}", response_model=TrackResponse)
+async def update_track(
+    request: Request,
+    track_id: str,
+    data: TrackUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Исправить метаданные трека. Фичи и индекс не затрагиваются."""
+    track = await db.get(TrackORM, track_id)
+    if not track:
+        raise HTTPException(404, "Track not found")
+
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(track, field, value)
+    await db.commit()
+
+    return _to_response(track, set(_engine(request).track_ids))
+
+
+@router.delete("/tracks/{track_id}", status_code=204)
+async def delete_track(
+    request: Request, track_id: str, db: AsyncSession = Depends(get_db)
+):
+    """Удалить трек вместе с его лайками, аудиофайлом и записью в индексе."""
+    track = await db.get(TrackORM, track_id)
+    if not track:
+        raise HTTPException(404, "Track not found")
+
+    filepath = settings.audio_dir / track.filename
+    await db.execute(delete(LikeORM).where(LikeORM.track_id == track_id))
+    await db.delete(track)
+    await db.commit()
+    filepath.unlink(missing_ok=True)
+
+    engine = _engine(request)
+    if engine.remove_tracks({track_id}):
+        # Сохраняем, иначе после рестарта удалённый трек вернётся в индекс с диска.
+        engine.save()
+
+
 @router.get("/tracks/{track_id}/features", response_model=TrackFeaturesResponse)
 async def get_track_features(track_id: str, db: AsyncSession = Depends(get_db)):
     from recommender.infrastructure.data_processing.extract import bytes_to_features

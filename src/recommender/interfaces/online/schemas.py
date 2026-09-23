@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TrackResponse(BaseModel):
@@ -13,6 +13,11 @@ class TrackResponse(BaseModel):
     created_at: datetime
     indexed: bool = True
     """False — трек в БД, но в поисковом индексе ещё нет. Вызови /index/rebuild."""
+
+
+class TrackUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1)
+    artist: str | None = Field(default=None, min_length=1)
 
 
 class TrackFeaturesResponse(BaseModel):
