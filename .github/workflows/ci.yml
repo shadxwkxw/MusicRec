@@ -2,31 +2,162 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
 
 jobs:
-  check:
+  # ── Быстрые проверки без тяжёлых зависимостей ──────────────────
+  lint:
+    name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "ruff>=0.5"
+      - run: ruff check src services tests scripts --output-format github
+      - run: ruff format --check src services tests scripts
 
+  typecheck:
+    name: Typecheck (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
+      - run: make install
+      - run: make typecheck
 
-      - name: System dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: make install
+      - run: make audit
 
-      - name: Install
-        run: make install
+  # ── Тесты ──────────────────────────────────────────────────────
+  unit:
+    name: Unit tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
+      - run: make install
+      - run: make test-unit
 
-      - name: Lint
-        run: make lint
+  integration:
+    name: Integration tests + coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
+      - run: make install
+      - name: Tests with coverage
+        run: make coverage
+      - name: Coverage summary
+        if: always()
+        run: |
+          echo '## Coverage' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          .venv/bin/coverage report --skip-covered >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-html
+          path: htmlcov/
 
-      - name: Typecheck
-        run: make typecheck
+  smoke:
+    name: Smoke (uvicorn + restart + batch CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
+      - run: make install
+      - run: make smoke
 
-      - name: Test
-        run: make test
+  # ── Упаковка ───────────────────────────────────────────────────
+  build:
+    name: Wheel build + install check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build --wheel
+      - name: Install wheel into a clean venv and run outside the repo
+        run: |
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/wheel-venv/bin/recommender-batch --help
+          /tmp/wheel-venv/bin/python -c "
+          from recommender.config import settings
+          from recommender.interfaces.online.main import app
+          assert settings.feature_dim == 82, settings.feature_dim
+          print('wheel ok:', app.title)
+          "
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+
+  docker:
+    name: Docker image (${{ matrix.service }})
+    needs: [unit, integration, smoke]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [online, batch]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: false
+          tags: music-recommender-${{ matrix.service }}:ci
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}

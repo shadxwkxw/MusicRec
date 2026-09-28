@@ -1,4 +1,5 @@
-.PHONY: install run test lint format typecheck clean \
+.PHONY: install run test test-unit test-integration coverage smoke audit build \
+        lint format typecheck clean \
         docker-build docker-up docker-down docker-logs \
         batch-extract batch-recommend \
         docker-batch-extract docker-batch-recommend
@@ -20,13 +21,35 @@ run:
 test:
 	$(VENV)/bin/pytest tests/ -v
 
+test-unit:
+	$(VENV)/bin/pytest tests/unit -v
+
+test-integration:
+	$(VENV)/bin/pytest tests/integration -v
+
+# Покрытие по всем тестам; падает, если ниже порога
+coverage:
+	$(VENV)/bin/pytest tests/ -q --cov=recommender --cov-report=term-missing \
+		--cov-report=html --cov-fail-under=80
+
+# Настоящий uvicorn + рестарт + batch CLI во временной папке
+smoke:
+	$(PY) scripts/smoke_test.py
+
+audit:
+	$(VENV)/bin/pip-audit --skip-editable
+
+build:
+	rm -rf dist
+	$(PY) -m build --wheel
+
 lint:
-	$(VENV)/bin/ruff check src services tests
-	$(VENV)/bin/ruff format --check src services tests
+	$(VENV)/bin/ruff check src services tests scripts
+	$(VENV)/bin/ruff format --check src services tests scripts
 
 format:
-	$(VENV)/bin/ruff format src services tests
-	$(VENV)/bin/ruff check --fix src services tests
+	$(VENV)/bin/ruff format src services tests scripts
+	$(VENV)/bin/ruff check --fix src services tests scripts
 
 typecheck:
 	$(VENV)/bin/mypy src
@@ -68,4 +91,4 @@ docker-batch-recommend:
 clean:
 	find . -type d -name __pycache__ -not -path './$(VENV)/*' -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name '*.pyc'     -not -path './$(VENV)/*' -delete
-	rm -rf .pytest_cache .ruff_cache
+	rm -rf .pytest_cache .ruff_cache .mypy_cache .coverage htmlcov dist
