@@ -54,6 +54,11 @@ pythonpath = ["src", "."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
+[tool.coverage.run]
+# Async SQLAlchemy переключается через greenlet; без этого трассировщик
+# (ctrace, по умолчанию на Python < 3.14) теряет строки после await.
+concurrency = ["greenlet", "thread"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
