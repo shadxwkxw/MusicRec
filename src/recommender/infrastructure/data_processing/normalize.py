@@ -1,8 +1,10 @@
 """Нормализация признаков — обёртка над sklearn-скейлерами с save/load.
 
-Опционально хранит per-dimension веса признаков (подобранные тюнингом):
-они применяются к сырому вектору до скейлера и сохраняются вместе с ним,
-поэтому любой transform() даёт вектор в том же пространстве, что и индекс.
+Опционально хранит per-dimension веса признаков (подобранные тюнингом) и
+сохраняет их вместе со скейлером, поэтому любой transform() даёт вектор в
+том же пространстве, что и индекс. Веса применяются ПОСЛЕ скейлера: все
+скейлеры работают по каждому измерению отдельно, и вес, применённый до
+них, сокращается ((w·x − w·μ) / (w·σ) = (x − μ) / σ).
 """
 
 from pathlib import Path
@@ -39,12 +41,9 @@ class FeatureNormalizer:
         """Обучен ли нормализатор."""
         return self._fitted
 
-    def _weigh(self, features: np.ndarray) -> np.ndarray:
-        return features if self.weights is None else features * self.weights
-
     def fit(self, features: np.ndarray) -> "FeatureNormalizer":
         """Обучить на матрице сырых признаков (n_tracks, n_features)."""
-        self.scaler.fit(self._weigh(features))
+        self.scaler.fit(features)
         self._fitted = True
         return self
 
@@ -54,7 +53,8 @@ class FeatureNormalizer:
             raise RuntimeError("Normalizer not fitted yet. Call fit() first.")
         if features.ndim == 1:
             features = features.reshape(1, -1)
-        return self.scaler.transform(self._weigh(features))
+        scaled = self.scaler.transform(features)
+        return scaled if self.weights is None else scaled * self.weights
 
     def fit_transform(self, features: np.ndarray) -> np.ndarray:
         self.fit(features)

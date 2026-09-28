@@ -81,6 +81,16 @@ class TestWeightedNormalizer:
         np.testing.assert_allclose(loaded.weights, weights)
         np.testing.assert_allclose(loaded.transform(data[0]), norm.transform(data[0]))
 
+    @pytest.mark.parametrize("method", ["standard", "minmax", "robust"])
+    def test_weights_actually_scale_output(self, method):
+        data = np.random.default_rng(0).standard_normal((20, 82)).astype(np.float32)
+        weights = np.linspace(0.5, 3.0, 82, dtype=np.float32)
+
+        plain = FeatureNormalizer(method).fit_transform(data)
+        weighted = FeatureNormalizer(method, weights=weights).fit_transform(data)
+
+        np.testing.assert_allclose(weighted, plain * weights, rtol=1e-5, atol=1e-5)
+
     def test_raw_query_lands_on_itself(self):
         data = np.random.randn(30, 82).astype(np.float32)
         weights = np.linspace(0.5, 3.0, 82, dtype=np.float32)
