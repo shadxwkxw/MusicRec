@@ -29,7 +29,6 @@ from recommender.infrastructure.data_processing.normalize import FeatureNormaliz
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import AutoMLRunORM, LikeORM, TrackORM
 
-
 # Индексы групп признаков в 58-мерном векторе
 FEATURE_GROUPS = {
     "mfcc": (0, 26),
@@ -52,9 +51,7 @@ def feature_weight_vector(weights: dict[str, float]) -> np.ndarray:
     return vec
 
 
-def apply_feature_weights(
-    features: np.ndarray, weights: dict[str, float]
-) -> np.ndarray:
+def apply_feature_weights(features: np.ndarray, weights: dict[str, float]) -> np.ndarray:
     """Применить групповые веса к матрице признаков."""
     return features * feature_weight_vector(weights)
 
@@ -62,9 +59,7 @@ def apply_feature_weights(
 async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     """Запустить Optuna-оптимизацию. Возвращает best params и score."""
     # Все треки с фичами
-    result = await db.execute(
-        select(TrackORM).where(TrackORM.feature_vector.isnot(None))
-    )
+    result = await db.execute(select(TrackORM).where(TrackORM.feature_vector.isnot(None)))
     tracks = result.scalars().all()
 
     if len(tracks) < 5:
@@ -85,7 +80,8 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
 
     # Только пользователи с >=2 лайками (для leave-one-out)
     eval_users = {
-        uid: tids for uid, tids in user_tracks.items()
+        uid: tids
+        for uid, tids in user_tracks.items()
         if len(tids) >= 2 and all(t in id_to_idx for t in tids)
     }
 
@@ -93,14 +89,14 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
         raise ValueError("Need users with >=2 liked tracks for evaluation")
 
     run = await db.get(AutoMLRunORM, run_id)
+    if run is None:
+        raise ValueError(f"AutoML run {run_id} not found")
     run.status = "running"
     run.started_at = datetime.datetime.utcnow()
     await db.commit()
 
     def objective(trial: optuna.Trial) -> float:
-        norm_method = trial.suggest_categorical(
-            "norm_method", ["standard", "minmax", "robust"]
-        )
+        norm_method = trial.suggest_categorical("norm_method", ["standard", "minmax", "robust"])
         metric = trial.suggest_categorical("metric", ["cosine", "euclidean"])
         boost_weight = trial.suggest_float("boost_weight", 0.0, 3.0)
 
@@ -109,9 +105,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
             for group_name in FEATURE_GROUPS
         }
 
-        normalizer = FeatureNormalizer(
-            method=norm_method, weights=feature_weight_vector(weights)
-        )
+        normalizer = FeatureNormalizer(method=norm_method, weights=feature_weight_vector(weights))
         normalized = normalizer.fit_transform(raw_features)
 
         engine = FaissRecommender(
@@ -133,8 +127,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
                 # Спрятанный лайк убираем и из co-like сигнала, иначе буст
                 # подсказывает ответ и hit-rate завышается.
                 visible_likes = {
-                    u: (tids - {held_out} if u == uid else tids)
-                    for u, tids in user_likes.items()
+                    u: (tids - {held_out} if u == uid else tids) for u, tids in user_likes.items()
                 }
                 boost = co_like_strength(query_tids[0], visible_likes)
 

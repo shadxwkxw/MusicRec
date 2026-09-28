@@ -12,7 +12,6 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
-
 ENV_VAR_PATTERN = re.compile(r"^\$\{([^}]+)\}$")
 
 
@@ -68,14 +67,14 @@ class Settings(BaseModel):
     def feature_dim(self) -> int:
         """Размерность итогового вектора признаков."""
         return (
-            self.n_mfcc * 2                # mfcc mean + std
-            + self.n_chroma * 2            # chroma mean + std
+            self.n_mfcc * 2  # mfcc mean + std
+            + self.n_chroma * 2  # chroma mean + std
             + (self.n_contrast_bands + 1) * 2  # contrast: librosa возвращает n_bands+1 строк
-            + 6 * 2                        # tonnetz mean + std
-            + 1                            # tempo
-            + 1                            # rms mean
-            + 1                            # zcr mean
-            + 3                            # spectral centroid/bandwidth/rolloff means
+            + 6 * 2  # tonnetz mean + std
+            + 1  # tempo
+            + 1  # rms mean
+            + 1  # zcr mean
+            + 3  # spectral centroid/bandwidth/rolloff means
         )
 
 

@@ -22,6 +22,7 @@ test:
 
 lint:
 	$(VENV)/bin/ruff check src services tests
+	$(VENV)/bin/ruff format --check src services tests
 
 format:
 	$(VENV)/bin/ruff format src services tests

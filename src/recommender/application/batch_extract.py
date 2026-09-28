@@ -20,7 +20,6 @@ from recommender.infrastructure.data_processing.extract import (
 )
 from recommender.infrastructure.storage.postgres import TrackORM
 
-
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a"}
 
 

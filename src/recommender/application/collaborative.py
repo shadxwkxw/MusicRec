@@ -13,9 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from recommender.infrastructure.storage.postgres import LikeORM
 
 
-def co_like_strength(
-    track_id: str, user_likes: dict[str, set[str]]
-) -> dict[str, float]:
+def co_like_strength(track_id: str, user_likes: dict[str, set[str]]) -> dict[str, float]:
     """{track_id: сила} — как часто трек лайкали вместе с track_id, в [0, 1]."""
     counts: dict[str, int] = defaultdict(int)
     for liked in user_likes.values():

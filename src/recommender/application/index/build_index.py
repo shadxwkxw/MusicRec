@@ -51,9 +51,7 @@ async def rebuild_index(db: AsyncSession) -> BuildIndexResult:
     Returns:
         Свежий движок/нормализатор и статистика. Оба уже сохранены на диск.
     """
-    result = await db.execute(
-        select(TrackORM).where(TrackORM.feature_vector.isnot(None))
-    )
+    result = await db.execute(select(TrackORM).where(TrackORM.feature_vector.isnot(None)))
     tracks = result.scalars().all()
 
     if not tracks:

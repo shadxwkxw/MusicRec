@@ -137,9 +137,7 @@ class TestFaissRecommender:
     def test_like_boost(self):
         engine, _ids, features = self._make_engine()
         boost = {"track_49": 100.0}
-        recs = engine.recommend(
-            features[0], limit=5, exclude_ids={"track_0"}, like_boost=boost
-        )
+        recs = engine.recommend(features[0], limit=5, exclude_ids={"track_0"}, like_boost=boost)
         assert recs[0].track_id == "track_49"
 
     @pytest.mark.parametrize("metric", ["cosine", "euclidean"])

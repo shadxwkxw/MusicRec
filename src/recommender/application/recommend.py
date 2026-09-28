@@ -60,9 +60,7 @@ async def recommend_for_user(
     limit: int = 10,
 ) -> list[Recommendation]:
     """Персональные рекомендации: усреднение векторов лайкнутых треков."""
-    result = await db.execute(
-        select(LikeORM.track_id).where(LikeORM.user_id == user_id)
-    )
+    result = await db.execute(select(LikeORM.track_id).where(LikeORM.user_id == user_id))
     liked_ids = [row[0] for row in result.fetchall()]
 
     if not liked_ids:

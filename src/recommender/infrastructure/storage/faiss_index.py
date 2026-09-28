@@ -29,16 +29,14 @@ class FaissRecommender(Recommender):
         self.dimension = dimension or settings.feature_dim
         self.metric = metric
         self.boost_weight = boost_weight
-        self.index: faiss.IndexFlat | None = None
+        self.index = self._new_index()
         self.track_ids: list[str] = []
-        self._build_index()
 
-    def _build_index(self) -> None:
+    def _new_index(self) -> faiss.Index:
         if self.metric == "cosine":
             # IndexFlatIP на L2-нормированных векторах == cosine similarity
-            self.index = faiss.IndexFlatIP(self.dimension)
-        else:
-            self.index = faiss.IndexFlatL2(self.dimension)
+            return faiss.IndexFlatIP(self.dimension)
+        return faiss.IndexFlatL2(self.dimension)
 
     def add_tracks(self, track_ids: list[str], features: np.ndarray) -> None:
         if features.ndim == 1:
@@ -67,16 +65,13 @@ class FaissRecommender(Recommender):
         # Берём с запасом, чтобы хватило после фильтрации.
         # При наличии like_boost сканируем весь индекс — иначе сильный буст
         # не сможет поднять трек, который не попал в топ-K поиска.
-        if like_boost:
-            search_k = self.index.ntotal
-        else:
-            search_k = min(limit * 3, self.index.ntotal)
+        search_k = self.index.ntotal if like_boost else min(limit * 3, self.index.ntotal)
         distances, indices = self.index.search(query, search_k)
 
         exclude_ids = exclude_ids or set()
         results: list[Recommendation] = []
 
-        for dist, idx in zip(distances[0], indices[0]):
+        for dist, idx in zip(distances[0], indices[0], strict=True):
             if idx < 0 or idx >= len(self.track_ids):
                 continue
             track_id = self.track_ids[idx]
@@ -107,7 +102,7 @@ class FaissRecommender(Recommender):
         return len(positions)
 
     def rebuild(self, track_ids: list[str], features: np.ndarray) -> None:
-        self._build_index()
+        self.index = self._new_index()
         self.track_ids = []
         self.add_tracks(track_ids, features)
 

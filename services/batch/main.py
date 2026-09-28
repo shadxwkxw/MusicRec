@@ -42,8 +42,7 @@ async def _recommend(args: argparse.Namespace) -> None:
             top_n=args.top_n,
         )
     print(
-        f"Batch recommend done: tracks_scored={result.tracks_scored}, "
-        f"output={result.output_path}"
+        f"Batch recommend done: tracks_scored={result.tracks_scored}, output={result.output_path}"
     )
 
 
@@ -53,17 +52,13 @@ def main() -> None:
 
     p_extract = sub.add_parser("extract", help="Extract features from a directory")
     p_extract.add_argument("--input-dir", required=True, help="Directory with audio")
-    p_extract.add_argument(
-        "--artist", default="Unknown", help="Default artist if unknown"
-    )
+    p_extract.add_argument("--artist", default="Unknown", help="Default artist if unknown")
     p_extract.set_defaults(func=_extract)
 
     p_recommend = sub.add_parser(
         "recommend", help="Precompute top-N recommendations for all tracks"
     )
-    p_recommend.add_argument(
-        "--output", required=True, help="Output path (.csv or .parquet)"
-    )
+    p_recommend.add_argument("--output", required=True, help="Output path (.csv or .parquet)")
     p_recommend.add_argument("--top-n", type=int, default=10)
     p_recommend.set_defaults(func=_recommend)
 

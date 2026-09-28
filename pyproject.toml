@@ -60,6 +60,12 @@ src = ["src", "services", "tests"]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = ["E501"]  # handled by formatter
 
+[tool.ruff.lint.flake8-bugbear]
+# Штатный способ объявлять зависимости и параметры в FastAPI
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.File", "fastapi.Form", "fastapi.Query",
+]
+
 [tool.mypy]
 python_version = "3.11"
 explicit_package_bases = true

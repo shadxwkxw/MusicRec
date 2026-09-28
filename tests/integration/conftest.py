@@ -88,14 +88,10 @@ async def api(tmp_path, monkeypatch, audio_files):
             return ids
 
         async def like(user_id: str, track_id: str) -> None:
-            resp = await client.post(
-                "/likes", json={"user_id": user_id, "track_id": track_id}
-            )
+            resp = await client.post("/likes", json={"user_id": user_id, "track_id": track_id})
             assert resp.status_code == 200, resp.text
 
-        yield SimpleNamespace(
-            client=client, sessions=sessions, upload=upload, seed=seed, like=like
-        )
+        yield SimpleNamespace(client=client, sessions=sessions, upload=upload, seed=seed, like=like)
 
     app.dependency_overrides.clear()
     await db_engine.dispose()

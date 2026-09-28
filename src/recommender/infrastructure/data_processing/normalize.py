@@ -15,7 +15,6 @@ from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 
 from recommender.config import settings
 
-
 SCALER_CLASSES = {
     "standard": StandardScaler,
     "minmax": MinMaxScaler,
@@ -28,9 +27,7 @@ class FeatureNormalizer:
 
     def __init__(self, method: str = "standard", weights: np.ndarray | None = None):
         if method not in SCALER_CLASSES:
-            raise ValueError(
-                f"Unknown method: {method}. Choose from {list(SCALER_CLASSES)}"
-            )
+            raise ValueError(f"Unknown method: {method}. Choose from {list(SCALER_CLASSES)}")
         self.method = method
         self.weights = None if weights is None else np.asarray(weights, dtype=np.float32)
         self.scaler = SCALER_CLASSES[method]()

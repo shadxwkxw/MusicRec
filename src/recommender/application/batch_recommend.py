@@ -9,7 +9,6 @@ import csv
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,9 +48,7 @@ async def run_batch_recommend(
     except FileNotFoundError:
         normalizer = None
 
-    result = await db.execute(
-        select(TrackORM).where(TrackORM.feature_vector.isnot(None))
-    )
+    result = await db.execute(select(TrackORM).where(TrackORM.feature_vector.isnot(None)))
     tracks = result.scalars().all()
 
     if not tracks:
@@ -65,9 +62,7 @@ async def run_batch_recommend(
         if normalizer is not None and normalizer.is_fitted:
             features = normalizer.transform(features).flatten()
 
-        recs = engine.recommend(
-            features, limit=top_n, exclude_ids={track.id}
-        )
+        recs = engine.recommend(features, limit=top_n, exclude_ids={track.id})
         for rank, rec in enumerate(recs, start=1):
             rows.append((track.id, rank, rec.track_id, round(rec.score, 6)))
 
@@ -79,9 +74,7 @@ async def run_batch_recommend(
     )
 
 
-def _write_output(
-    rows: list[tuple[str, int, str, float]], output_path: Path
-) -> None:
+def _write_output(rows: list[tuple[str, int, str, float]], output_path: Path) -> None:
     if output_path.suffix.lower() == ".parquet":
         try:
             import pandas as pd

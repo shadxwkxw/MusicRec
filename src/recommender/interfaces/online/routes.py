@@ -6,7 +6,6 @@ import shutil
 import uuid
 
 import librosa
-import numpy as np
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -54,7 +53,6 @@ from recommender.interfaces.online.schemas import (
     TrackUpdate,
 )
 
-
 router = APIRouter()
 
 
@@ -69,6 +67,7 @@ def _normalizer(request: Request) -> FeatureNormalizer:
 # ──────────────────────────────────────────
 # Tracks
 # ──────────────────────────────────────────
+
 
 @router.post("/tracks/upload", response_model=TrackResponse)
 async def upload_track(
@@ -90,7 +89,7 @@ async def upload_track(
         features = extract_features(filepath)
     except Exception as e:
         filepath.unlink(missing_ok=True)
-        raise HTTPException(400, f"Failed to extract features: {e}")
+        raise HTTPException(400, f"Failed to extract features: {e}") from e
 
     duration = librosa.get_duration(filename=str(filepath))
 
@@ -146,10 +145,7 @@ async def get_all_tracks(
     offset: int = Query(0, ge=0),
 ):
     result = await db.execute(
-        select(TrackORM)
-        .order_by(TrackORM.created_at.desc())
-        .limit(limit)
-        .offset(offset)
+        select(TrackORM).order_by(TrackORM.created_at.desc()).limit(limit).offset(offset)
     )
     indexed_ids = set(_engine(request).track_ids)
     return [_to_response(t, indexed_ids) for t in result.scalars().all()]
@@ -175,9 +171,7 @@ async def update_track(
 
 
 @router.delete("/tracks/{track_id}", status_code=204)
-async def delete_track(
-    request: Request, track_id: str, db: AsyncSession = Depends(get_db)
-):
+async def delete_track(request: Request, track_id: str, db: AsyncSession = Depends(get_db)):
     """Удалить трек вместе с его лайками, аудиофайлом и записью в индексе."""
     track = await db.get(TrackORM, track_id)
     if not track:
@@ -215,6 +209,7 @@ async def get_track_features(track_id: str, db: AsyncSession = Depends(get_db)):
 # Recommendations
 # ──────────────────────────────────────────
 
+
 async def _enrich(db: AsyncSession, recs) -> list[RecommendationItem]:
     items: list[RecommendationItem] = []
     for rec in recs:
@@ -250,7 +245,7 @@ async def get_recommendations(
             use_likes=use_likes,
         )
     except TrackNotFoundError:
-        raise HTTPException(404, "Track not found")
+        raise HTTPException(404, "Track not found") from None
 
     return RecommendationResponse(
         source_track_id=track_id,
@@ -258,9 +253,7 @@ async def get_recommendations(
     )
 
 
-@router.get(
-    "/recommendations/user/{user_id}", response_model=RecommendationResponse
-)
+@router.get("/recommendations/user/{user_id}", response_model=RecommendationResponse)
 async def get_user_recommendations(
     request: Request,
     user_id: str,
@@ -277,7 +270,7 @@ async def get_user_recommendations(
             limit=limit,
         )
     except NoLikedTracksError:
-        raise HTTPException(404, "No liked tracks found for user")
+        raise HTTPException(404, "No liked tracks found for user") from None
 
     return RecommendationResponse(
         source_track_id=f"user:{user_id}",
@@ -288,6 +281,7 @@ async def get_user_recommendations(
 # ──────────────────────────────────────────
 # Likes
 # ──────────────────────────────────────────
+
 
 @router.post("/likes", response_model=LikeResponse)
 async def add_like(data: LikeRequest, db: AsyncSession = Depends(get_db)):
@@ -305,6 +299,7 @@ async def add_like(data: LikeRequest, db: AsyncSession = Depends(get_db)):
 # ──────────────────────────────────────────
 # Tuning (Optuna)
 # ──────────────────────────────────────────
+
 
 @router.post("/automl/train")
 async def start_tuning(
@@ -360,14 +355,13 @@ async def get_tuning_status(db: AsyncSession = Depends(get_db)):
 # Index management
 # ──────────────────────────────────────────
 
+
 @router.post("/index/rebuild")
-async def rebuild_index_endpoint(
-    request: Request, db: AsyncSession = Depends(get_db)
-):
+async def rebuild_index_endpoint(request: Request, db: AsyncSession = Depends(get_db)):
     try:
         result = await rebuild_index(db)
     except NoTracksError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
     request.app.state.engine = result.engine
     request.app.state.normalizer = result.normalizer

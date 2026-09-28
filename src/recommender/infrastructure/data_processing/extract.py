@@ -41,9 +41,7 @@ def extract_features(audio_path: str | Path) -> np.ndarray:
     features.extend(np.std(chroma, axis=1))
 
     # 3. Spectral Contrast — brightness per band
-    contrast = librosa.feature.spectral_contrast(
-        y=y, sr=sr, n_bands=settings.n_contrast_bands
-    )
+    contrast = librosa.feature.spectral_contrast(y=y, sr=sr, n_bands=settings.n_contrast_bands)
     features.extend(np.mean(contrast, axis=1))
     features.extend(np.std(contrast, axis=1))
 
