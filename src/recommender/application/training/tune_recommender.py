@@ -16,6 +16,7 @@
 
 import datetime
 import json
+from collections.abc import Sequence
 
 import numpy as np
 import optuna
@@ -60,7 +61,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     """Запустить Optuna-оптимизацию. Возвращает best params и score."""
     # Все треки с фичами
     result = await db.execute(select(TrackORM).where(TrackORM.feature_vector.isnot(None)))
-    tracks = result.scalars().all()
+    tracks: Sequence[TrackORM] = result.scalars().all()
 
     if len(tracks) < 5:
         raise ValueError("Need at least 5 tracks with features to run tuning")
@@ -71,7 +72,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
 
     # Лайки для evaluation
     result = await db.execute(select(LikeORM))
-    likes = result.scalars().all()
+    likes: Sequence[LikeORM] = result.scalars().all()
 
     user_tracks: dict[str, list[str]] = {}
     for like in likes:

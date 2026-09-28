@@ -8,6 +8,8 @@ from pathlib import Path
 
 import librosa
 import numpy as np
+from librosa.beat import beat_track
+from librosa.effects import harmonic
 
 from recommender.config import settings
 
@@ -46,13 +48,13 @@ def extract_features(audio_path: str | Path) -> np.ndarray:
     features.extend(np.std(contrast, axis=1))
 
     # 4. Tonnetz — tonal centroid features
-    y_harmonic = librosa.effects.harmonic(y)
+    y_harmonic = harmonic(y)
     tonnetz = librosa.feature.tonnetz(y=y_harmonic, sr=sr)
     features.extend(np.mean(tonnetz, axis=1))
     features.extend(np.std(tonnetz, axis=1))
 
     # 5. Tempo (BPM)
-    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+    tempo, _ = beat_track(y=y, sr=sr)
     if isinstance(tempo, np.ndarray):
         tempo = tempo[0]
     features.append(float(tempo))

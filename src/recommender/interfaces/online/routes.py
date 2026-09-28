@@ -4,6 +4,7 @@ import datetime
 import json
 import shutil
 import uuid
+from collections.abc import Sequence
 
 import librosa
 from fastapi import (
@@ -91,7 +92,7 @@ async def upload_track(
         filepath.unlink(missing_ok=True)
         raise HTTPException(400, f"Failed to extract features: {e}") from e
 
-    duration = librosa.get_duration(filename=str(filepath))
+    duration = librosa.get_duration(path=str(filepath))
 
     track = TrackORM(
         id=track_id,
@@ -148,7 +149,8 @@ async def get_all_tracks(
         select(TrackORM).order_by(TrackORM.created_at.desc()).limit(limit).offset(offset)
     )
     indexed_ids = set(_engine(request).track_ids)
-    return [_to_response(t, indexed_ids) for t in result.scalars().all()]
+    tracks: Sequence[TrackORM] = result.scalars().all()
+    return [_to_response(t, indexed_ids) for t in tracks]
 
 
 @router.patch("/tracks/{track_id}", response_model=TrackResponse)
@@ -336,7 +338,7 @@ async def start_tuning(
 @router.get("/automl/status", response_model=list[AutoMLStatusResponse])
 async def get_tuning_status(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(AutoMLRunORM).order_by(AutoMLRunORM.id.desc()))
-    runs = result.scalars().all()
+    runs: Sequence[AutoMLRunORM] = result.scalars().all()
     return [
         AutoMLStatusResponse(
             id=r.id,

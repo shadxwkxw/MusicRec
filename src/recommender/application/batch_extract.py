@@ -64,7 +64,7 @@ async def run_batch_extract(
 
         try:
             features = extract_features(path)
-            duration = librosa.get_duration(filename=str(path))
+            duration = librosa.get_duration(path=str(path))
 
             track = TrackORM(
                 id=str(uuid.uuid4()),

@@ -96,7 +96,8 @@ class FaissRecommender(Recommender):
             return 0
         # IndexFlat.remove_ids сдвигает оставшиеся векторы с сохранением порядка,
         # поэтому track_ids фильтруется тем же способом, чтобы позиции совпадали.
-        self.index.remove_ids(np.array(positions, dtype=np.int64))
+        # Python-обёртка faiss принимает массив id, стабы описывают только IDSelector
+        self.index.remove_ids(np.array(positions, dtype=np.int64))  # type: ignore[arg-type, unused-ignore]
         removed = set(positions)
         self.track_ids = [tid for i, tid in enumerate(self.track_ids) if i not in removed]
         return len(positions)

@@ -6,6 +6,7 @@ FAISS-индекс. Метод нормализации, веса признак
 Артефакты сохраняются на диск.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -52,7 +53,7 @@ async def rebuild_index(db: AsyncSession) -> BuildIndexResult:
         Свежий движок/нормализатор и статистика. Оба уже сохранены на диск.
     """
     result = await db.execute(select(TrackORM).where(TrackORM.feature_vector.isnot(None)))
-    tracks = result.scalars().all()
+    tracks: Sequence[TrackORM] = result.scalars().all()
 
     if not tracks:
         raise NoTracksError("No tracks with features in database")

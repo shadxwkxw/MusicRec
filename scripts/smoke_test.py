@@ -5,7 +5,9 @@
 """
 
 import os
+import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -155,14 +157,29 @@ def main() -> None:
                 check(ids[-1] not in {r["track_id"] for r in recs}, "deleted track not recommended")
 
             print("batch CLI")
+            batch = [sys.executable, str(ROOT / "services" / "batch" / "main.py")]
+            inbox = work / "inbox"
+            inbox.mkdir()
+            for i in range(2):
+                shutil.copy(audio[i], inbox / f"inbox_{i}.wav")
+            db_path = work / "data" / "smoke.db"
+
+            def track_count() -> int:
+                with sqlite3.connect(db_path) as con:
+                    return con.execute("select count(*) from tracks").fetchone()[0]
+
+            before = track_count()
+            subprocess.run([*batch, "extract", "--input-dir", str(inbox)], env=env, check=True)
+            check(track_count() == before + 2, "batch extract imported 2 files")
+            subprocess.run([*batch, "extract", "--input-dir", str(inbox)], env=env, check=True)
+            check(track_count() == before + 2, "batch extract skips already imported files")
+
             out = work / "recs.parquet"
             subprocess.run(
-                [sys.executable, str(ROOT / "services" / "batch" / "main.py"),
-                 "recommend", "--output", str(out), "--top-n", "3"],
-                env=env, check=True,
-            )  # fmt: skip
+                [*batch, "recommend", "--output", str(out), "--top-n", "3"], env=env, check=True
+            )
             df = pd.read_parquet(out)
-            check(len(df) == (N_TRACKS - 1) * 3, "batch wrote top-3 for every track")
+            check(len(df) == track_count() * 3, "batch wrote top-3 for every track")
             check((df.source_track_id != df.target_track_id).all(), "batch has no self-recs")
         except Exception:
             print(f"\n--- server log ---\n{log.read_text() if log.exists() else '(empty)'}")

@@ -76,3 +76,9 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 pretty = true
 show_error_codes = true
+
+[[tool.mypy.overrides]]
+# librosa>=1.0 использует синтаксис Python 3.12 (`type X = ...`), который mypy
+# не разбирает при python_version = "3.11"; типов у неё всё равно нет.
+module = ["librosa", "librosa.*"]
+follow_imports = "skip"

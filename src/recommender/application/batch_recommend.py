@@ -6,6 +6,7 @@
 """
 
 import csv
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,7 +50,7 @@ async def run_batch_recommend(
         normalizer = None
 
     result = await db.execute(select(TrackORM).where(TrackORM.feature_vector.isnot(None)))
-    tracks = result.scalars().all()
+    tracks: Sequence[TrackORM] = result.scalars().all()
 
     if not tracks:
         raise RuntimeError("No tracks with features in database")
