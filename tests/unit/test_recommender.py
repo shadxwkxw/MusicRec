@@ -227,6 +227,55 @@ class TestCoLikeStrength:
         assert co_like_strength("x", {"u1": {"a", "b"}}) == {}
 
 
+class TestEvaluate:
+    @staticmethod
+    def _setup(points: dict[str, list[float]], boost_weight: float = 0.0):
+        ids = list(points)
+        vectors = np.array([points[t] for t in ids], dtype=np.float32)
+        engine = FaissRecommender(dimension=3, metric="euclidean", boost_weight=boost_weight)
+        engine.add_tracks(ids, vectors.copy())
+        return engine, vectors, {t: i for i, t in enumerate(ids)}
+
+    def test_ranks_for_both_paths(self):
+        from recommender.application.training.tune_recommender import evaluate
+
+        engine, vectors, id_to_idx = self._setup(
+            {
+                "a1": [0, 0, 0],
+                "a2": [0.1, 0, 0],
+                "a3": [0.2, 0, 0],
+                "b1": [5, 5, 5],
+                "b2": [6, 6, 6],
+            }
+        )
+        likes = {
+            "u": {"a1", "a3"},
+            "single": {"b1"},  # один лайк — оценить нельзя
+            "ghost": {"a1", "missing"},  # трека нет в индексе
+        }
+
+        metrics = evaluate(engine, vectors, id_to_idx, likes, k=3)
+
+        # По треку: из a1 первым идёт a2, a3 — вторым (и наоборот)
+        assert metrics["track_hit@3"] == 1.0
+        assert metrics["track_mrr@3"] == pytest.approx(0.5)
+        # По пользователю: запрос = один оставшийся лайк, он исключён, так же a2 первым
+        assert metrics["user_mrr@3"] == pytest.approx(0.5)
+
+    def test_hidden_like_does_not_leak_into_boost(self):
+        from recommender.application.training.tune_recommender import evaluate
+
+        engine, vectors, id_to_idx = self._setup(
+            {"a": [1, 0, 0], "b": [0.9, 0.1, 0], "x": [0, 0, 1], "c": [0, 0.1, 1]},
+            boost_weight=1e6,
+        )
+
+        metrics = evaluate(engine, vectors, id_to_idx, {"u": {"a", "x"}}, k=1)
+
+        # Без утечки ближайшими остаются b и c; с утечкой буст поднял бы спрятанный лайк
+        assert metrics["track_hit@1"] == 0.0
+
+
 class TestFeatureGroups:
     def test_apply_weights(self):
         from recommender.application.training.tune_recommender import (

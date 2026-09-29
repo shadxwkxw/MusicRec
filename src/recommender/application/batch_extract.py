@@ -5,7 +5,6 @@
 пропускается (по имени файла).
 """
 
-import datetime
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,7 +17,7 @@ from recommender.infrastructure.data_processing.extract import (
     extract_features,
     features_to_bytes,
 )
-from recommender.infrastructure.storage.postgres import TrackORM
+from recommender.infrastructure.storage.postgres import TrackORM, utcnow
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a"}
 
@@ -73,7 +72,7 @@ async def run_batch_extract(
                 filename=path.name,
                 duration=duration,
                 feature_vector=features_to_bytes(features),
-                created_at=datetime.datetime.utcnow(),
+                created_at=utcnow(),
             )
             db.add(track)
             await db.commit()

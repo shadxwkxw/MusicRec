@@ -6,15 +6,15 @@
 - групповые веса признаков (mfcc / chroma / contrast / ...)
 - вес коллаборативного бустинга
 
-Метрика: leave-one-out hit-rate на лайках — для каждого пользователя
-прячем один лайкнутый трек и проверяем, рекомендует ли система его
-по другим лайкнутым.
+Метрика: leave-one-out на лайках (см. evaluate) — для каждого пользователя
+прячем один лайкнутый трек и проверяем, где система ставит его в выдаче,
+построенной по остальным лайкам. Оптимизируется среднее MRR@10 по двум
+прод-путям: рекомендации по треку (с бустом) и по пользователю.
 
 Итог: индекс и нормализатор пересобраны с лучшими параметрами и
 сохранены на диск.
 """
 
-import datetime
 import json
 from collections.abc import Sequence
 
@@ -28,9 +28,11 @@ from recommender.config import settings
 from recommender.infrastructure.data_processing.extract import bytes_to_features
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
-from recommender.infrastructure.storage.postgres import AutoMLRunORM, LikeORM, TrackORM
+from recommender.infrastructure.storage.postgres import AutoMLRunORM, LikeORM, TrackORM, utcnow
 
-# Индексы групп признаков в 58-мерном векторе
+EVAL_K = 10
+
+# Индексы групп признаков в 82-мерном векторе
 FEATURE_GROUPS = {
     "mfcc": (0, 26),
     "chroma": (26, 50),
@@ -55,6 +57,61 @@ def feature_weight_vector(weights: dict[str, float]) -> np.ndarray:
 def apply_feature_weights(features: np.ndarray, weights: dict[str, float]) -> np.ndarray:
     """Применить групповые веса к матрице признаков."""
     return features * feature_weight_vector(weights)
+
+
+def _rank(recs: list, track_id: str) -> int | None:
+    """1-based позиция трека в выдаче или None."""
+    for pos, rec in enumerate(recs, start=1):
+        if rec.track_id == track_id:
+            return pos
+    return None
+
+
+def evaluate(
+    engine: FaissRecommender,
+    normalized: np.ndarray,
+    id_to_idx: dict[str, int],
+    user_likes: dict[str, set[str]],
+    k: int = EVAL_K,
+) -> dict[str, float]:
+    """Leave-one-out по лайкам для обоих прод-путей рекомендаций.
+
+    track: запрос от каждого другого лайка пользователя, с co-like бустом;
+           спрятанный лайк убран и из буста, иначе он подсказывает ответ.
+    user:  запрос — среднее остальных лайков, они же исключены, без буста.
+    Для каждого пути считаются hit@k и MRR@k.
+    """
+    ranks: dict[str, list[int | None]] = {"track": [], "user": []}
+    for uid, liked in user_likes.items():
+        if len(liked) < 2 or any(t not in id_to_idx for t in liked):
+            continue
+        for held_out in sorted(liked):
+            others = sorted(liked - {held_out})
+            visible = {u: (t - {held_out} if u == uid else t) for u, t in user_likes.items()}
+
+            for query_id in others:
+                recs = engine.recommend(
+                    normalized[id_to_idx[query_id]],
+                    limit=k,
+                    exclude_ids={query_id},
+                    like_boost=co_like_strength(query_id, visible) or None,
+                )
+                ranks["track"].append(_rank(recs, held_out))
+
+            query = normalized[[id_to_idx[t] for t in others]].mean(axis=0)
+            recs = engine.recommend(query, limit=k, exclude_ids=set(others))
+            ranks["user"].append(_rank(recs, held_out))
+
+    metrics: dict[str, float] = {}
+    for path, path_ranks in ranks.items():
+        n = len(path_ranks) or 1
+        metrics[f"{path}_hit@{k}"] = sum(r is not None for r in path_ranks) / n
+        metrics[f"{path}_mrr@{k}"] = sum(1 / r for r in path_ranks if r is not None) / n
+    return metrics
+
+
+def objective_score(metrics: dict[str, float], k: int = EVAL_K) -> float:
+    return (metrics[f"track_mrr@{k}"] + metrics[f"user_mrr@{k}"]) / 2
 
 
 async def run_tuning(db: AsyncSession, run_id: int) -> dict:
@@ -93,7 +150,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     if run is None:
         raise ValueError(f"AutoML run {run_id} not found")
     run.status = "running"
-    run.started_at = datetime.datetime.utcnow()
+    run.started_at = utcnow()
     await db.commit()
 
     def objective(trial: optuna.Trial) -> float:
@@ -114,36 +171,9 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
         )
         engine.add_tracks(track_ids, normalized.copy())
 
-        # leave-one-out hit rate
-        hits = 0
-        total = 0
-        for uid, liked_tids in eval_users.items():
-            for i, held_out in enumerate(liked_tids):
-                query_tids = [t for j, t in enumerate(liked_tids) if j != i]
-                if not query_tids:
-                    continue
-                query_idx = id_to_idx[query_tids[0]]
-                query_vec = normalized[query_idx]
-
-                # Спрятанный лайк убираем и из co-like сигнала, иначе буст
-                # подсказывает ответ и hit-rate завышается.
-                visible_likes = {
-                    u: (tids - {held_out} if u == uid else tids) for u, tids in user_likes.items()
-                }
-                boost = co_like_strength(query_tids[0], visible_likes)
-
-                recs = engine.recommend(
-                    query_vec,
-                    limit=20,
-                    exclude_ids={query_tids[0]},
-                    like_boost=boost or None,
-                )
-                rec_ids = {r.track_id for r in recs}
-                if held_out in rec_ids:
-                    hits += 1
-                total += 1
-
-        return hits / total if total > 0 else 0.0
+        metrics = evaluate(engine, normalized, id_to_idx, user_likes)
+        trial.set_user_attr("metrics", metrics)
+        return objective_score(metrics)
 
     study = optuna.create_study(direction="maximize")
     study.optimize(
@@ -157,7 +187,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     run.best_score = study.best_value
     run.best_params = json.dumps(best)
     run.n_trials = len(study.trials)
-    run.completed_at = datetime.datetime.utcnow()
+    run.completed_at = utcnow()
     await db.commit()
 
     # Пересобрать индекс с лучшими параметрами
@@ -180,4 +210,5 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
         "best_score": study.best_value,
         "best_params": best,
         "n_trials": len(study.trials),
+        "metrics": study.best_trial.user_attrs["metrics"],
     }

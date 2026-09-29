@@ -14,6 +14,11 @@ from sqlalchemy.orm import DeclarativeBase, relationship
 from recommender.config import settings
 
 
+def utcnow() -> datetime.datetime:
+    """Наивное UTC-время: в БД уже хранятся значения без таймзоны."""
+    return datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -27,7 +32,7 @@ class TrackORM(Base):
     filename = Column(String, nullable=False)
     duration = Column(Float, nullable=True)
     feature_vector = Column(LargeBinary, nullable=True)  # numpy bytes
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     likes = relationship("LikeORM", back_populates="track")
 
@@ -38,7 +43,7 @@ class LikeORM(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(String, nullable=False, index=True)
     track_id = Column(String, ForeignKey("tracks.id"), nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     track = relationship("TrackORM", back_populates="likes")
 

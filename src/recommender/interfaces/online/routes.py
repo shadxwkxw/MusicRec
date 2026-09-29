@@ -1,6 +1,5 @@
 """REST-роуты online-сервиса. Тонкий слой поверх application use cases."""
 
-import datetime
 import json
 import shutil
 import uuid
@@ -42,6 +41,7 @@ from recommender.infrastructure.storage.postgres import (
     TrackORM,
     async_session,
     get_db,
+    utcnow,
 )
 from recommender.interfaces.online.schemas import (
     AutoMLStatusResponse,
@@ -328,7 +328,7 @@ async def start_tuning(
                 r = await session.get(AutoMLRunORM, run_id)
                 r.status = "failed"
                 r.best_params = json.dumps({"error": str(e)})
-                r.completed_at = datetime.datetime.utcnow()
+                r.completed_at = utcnow()
                 await session.commit()
 
     background_tasks.add_task(_train, run.id)
