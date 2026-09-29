@@ -1,4 +1,4 @@
-.PHONY: install run test test-unit test-integration coverage smoke audit build \
+.PHONY: install lock upgrade run test test-unit test-integration coverage smoke audit build \
         lint format typecheck clean \
         docker-build docker-up docker-down docker-logs \
         batch-extract batch-recommend \
@@ -6,14 +6,22 @@
 
 VENV := .venv
 PY   := $(VENV)/bin/python
-PIP  := $(PY) -m pip
 export PYTHONPATH := $(CURDIR)/src:$(CURDIR)
+export UV_PROJECT_ENVIRONMENT := $(abspath $(VENV))
 
 # ── Local development ────────────────────────────────────────────
+# Точные версии из uv.lock; падает, если lock не соответствует pyproject.toml
 install:
-	python3 -m venv $(VENV)
-	$(PIP) install --upgrade pip
-	$(PIP) install -e ".[dev]"
+	uv sync --locked --extra dev
+
+# Обновить uv.lock после правки зависимостей в pyproject.toml
+lock:
+	uv lock
+
+# Поднять все зависимости до свежих версий в рамках ограничений pyproject.toml
+upgrade:
+	uv lock --upgrade
+	uv sync --locked --extra dev
 
 run:
 	$(VENV)/bin/uvicorn recommender.interfaces.online.main:app --reload --port 8000
@@ -36,8 +44,10 @@ coverage:
 smoke:
 	$(PY) scripts/smoke_test.py
 
+# Проверяет зафиксированные в uv.lock версии (для всех версий Python), а не .venv
 audit:
-	$(VENV)/bin/pip-audit --skip-editable
+	uv export --locked --extra dev --no-emit-project -o $(VENV)/audit-requirements.txt
+	$(VENV)/bin/pip-audit --disable-pip --require-hashes -r $(VENV)/audit-requirements.txt
 
 build:
 	rm -rf dist
