@@ -23,7 +23,7 @@ import optuna
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from recommender.application.collaborative import co_like_strength
+from recommender.application.collaborative import co_like_strength, user_co_like_strength
 from recommender.config import settings
 from recommender.infrastructure.data_processing.extract import bytes_to_features
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
@@ -78,7 +78,8 @@ def evaluate(
 
     track: запрос от каждого другого лайка пользователя, с co-like бустом;
            спрятанный лайк убран и из буста, иначе он подсказывает ответ.
-    user:  запрос — среднее остальных лайков, они же исключены, без буста.
+    user:  запрос — среднее остальных лайков, они же исключены, с co-like
+           бустом от них; спрятанный лайк так же убран из буста.
     Для каждого пути считаются hit@k и MRR@k.
     """
     ranks: dict[str, list[int | None]] = {"track": [], "user": []}
@@ -99,7 +100,12 @@ def evaluate(
                 ranks["track"].append(_rank(recs, held_out))
 
             query = normalized[[id_to_idx[t] for t in others]].mean(axis=0)
-            recs = engine.recommend(query, limit=k, exclude_ids=set(others))
+            recs = engine.recommend(
+                query,
+                limit=k,
+                exclude_ids=set(others),
+                like_boost=user_co_like_strength(set(others), visible) or None,
+            )
             ranks["user"].append(_rank(recs, held_out))
 
     metrics: dict[str, float] = {}

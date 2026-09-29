@@ -136,6 +136,55 @@ async def test_user_recommendations_exclude_liked(api):
     assert (await api.client.get("/recommendations/user/nobody")).status_code == 404
 
 
+async def test_user_like_boost_raises_only_neighbour_liked_track(api):
+    a, b, c, d, e = await api.seed(5)
+    await api.like("u1", a)
+    await api.like("u1", b)
+    await api.like("u2", a)
+    await api.like("u2", c)  # у u2 общий с u1 лайк a → c получает буст для u1
+
+    async def scores(use_likes: bool) -> dict[str, float]:
+        resp = await api.client.get("/recommendations/user/u1", params={"use_likes": use_likes})
+        return {r["track_id"]: r["score"] for r in resp.json()["recommendations"]}
+
+    plain, boosted = await scores(False), await scores(True)
+
+    bonus = app.state.engine.boost_weight
+    assert boosted[c] == pytest.approx(plain[c] + bonus, abs=1e-3)
+    assert boosted[d] == pytest.approx(plain[d], abs=1e-3)
+    assert boosted[e] == pytest.approx(plain[e], abs=1e-3)
+
+
+async def test_batch_recommend_with_and_without_likes(api, tmp_path):
+    import pandas as pd
+
+    from recommender.application.batch_recommend import run_batch_recommend
+
+    a, b, c, d = await api.seed(4)
+    await api.like("u1", a)
+    await api.like("u1", c)
+
+    async def batch(use_likes: bool) -> pd.DataFrame:
+        out = tmp_path / f"recs_{use_likes}.parquet"
+        async with api.sessions() as db:
+            result = await run_batch_recommend(db, out, top_n=3, use_likes=use_likes)
+        assert result.tracks_scored == 4
+        return pd.read_parquet(out)
+
+    plain, boosted = await batch(False), await batch(True)
+
+    assert len(plain) == len(boosted) == 4 * 3
+    assert (plain.source_track_id != plain.target_track_id).all()
+
+    def score(df: pd.DataFrame, src: str, dst: str) -> float:
+        row = df[(df.source_track_id == src) & (df.target_track_id == dst)]
+        return float(row.score.iloc[0])
+
+    bonus = app.state.engine.boost_weight
+    assert score(boosted, a, c) == pytest.approx(score(plain, a, c) + bonus, abs=1e-3)
+    assert score(boosted, a, b) == pytest.approx(score(plain, a, b), abs=1e-3)
+
+
 # ── Редактирование и удаление ───────────────────────────────────
 
 

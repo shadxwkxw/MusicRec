@@ -181,6 +181,16 @@ def main() -> None:
             df = pd.read_parquet(out)
             check(len(df) == track_count() * 3, "batch wrote top-3 for every track")
             check((df.source_track_id != df.target_track_id).all(), "batch has no self-recs")
+
+            out_likes = work / "recs_likes.parquet"
+            subprocess.run(
+                [*batch, "recommend", "--output", str(out_likes), "--top-n", "3", "--use-likes"],
+                env=env,
+                check=True,
+            )
+            boosted = pd.read_parquet(out_likes)
+            check(len(boosted) == len(df), "batch --use-likes wrote the same number of rows")
+            check(not boosted.score.equals(df.score), "batch --use-likes changed scores")
         except Exception:
             print(f"\n--- server log ---\n{log.read_text() if log.exists() else '(empty)'}")
             raise

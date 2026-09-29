@@ -226,6 +226,14 @@ class TestCoLikeStrength:
 
         assert co_like_strength("x", {"u1": {"a", "b"}}) == {}
 
+    def test_user_strength_sums_over_likes_and_skips_own(self):
+        from recommender.application.collaborative import user_co_like_strength
+
+        likes = {"me": {"a", "b"}, "u1": {"a", "c"}, "u2": {"a", "b", "d"}, "u3": {"e"}}
+
+        # от a: b=1, c=0.5, d=0.5; от b: a=1, d=0.5 → без своих: c=0.5, d=1.0
+        assert user_co_like_strength({"a", "b"}, likes) == {"c": 0.5, "d": 1.0}
+
 
 class TestEvaluate:
     @staticmethod

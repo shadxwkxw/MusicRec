@@ -260,6 +260,7 @@ async def get_user_recommendations(
     request: Request,
     user_id: str,
     limit: int = 10,
+    use_likes: bool = True,
     db: AsyncSession = Depends(get_db),
 ):
     """Персональные рекомендации по лайкам пользователя."""
@@ -270,6 +271,7 @@ async def get_user_recommendations(
             engine=_engine(request),
             normalizer=_normalizer(request),
             limit=limit,
+            use_likes=use_likes,
         )
     except NoLikedTracksError:
         raise HTTPException(404, "No liked tracks found for user") from None

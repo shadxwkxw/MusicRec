@@ -40,6 +40,7 @@ async def _recommend(args: argparse.Namespace) -> None:
             db=session,
             output_path=Path(args.output),
             top_n=args.top_n,
+            use_likes=args.use_likes,
         )
     print(
         f"Batch recommend done: tracks_scored={result.tracks_scored}, output={result.output_path}"
@@ -60,6 +61,9 @@ def main() -> None:
     )
     p_recommend.add_argument("--output", required=True, help="Output path (.csv or .parquet)")
     p_recommend.add_argument("--top-n", type=int, default=10)
+    p_recommend.add_argument(
+        "--use-likes", action="store_true", help="Apply co-like boost from user likes"
+    )
     p_recommend.set_defaults(func=_recommend)
 
     args = parser.parse_args()
