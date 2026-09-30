@@ -284,6 +284,60 @@ class TestEvaluate:
         assert metrics["track_hit@1"] == 0.0
 
 
+class TestConfig:
+    def test_packaged_default_config_matches_repo_config(self):
+        from pathlib import Path
+
+        import recommender
+
+        root = Path(__file__).resolve().parents[2]
+        packaged = Path(recommender.__file__).parent / "default_config.yaml"
+        # Встроенная копия используется вне репозитория (wheel, Docker) и не должна отставать
+        assert packaged.read_text() == (root / "configs" / "config.yaml").read_text()
+
+    def test_invalid_values_are_rejected(self):
+        from pathlib import Path
+
+        import yaml
+        from pydantic import ValidationError
+
+        from recommender.config import _build_settings
+
+        root = Path(__file__).resolve().parents[2]
+        raw = yaml.safe_load((root / "configs" / "config.yaml").read_text())
+        raw["database"]["url"] = "sqlite+aiosqlite://"
+        raw["recommendation"]["default_metric"] = "manhattan"
+
+        with pytest.raises(ValidationError, match="default_metric"):
+            _build_settings(raw)
+
+    def test_defaults_come_from_config(self, monkeypatch):
+        from recommender.config import settings
+
+        monkeypatch.setattr(settings, "default_metric", "euclidean")
+        monkeypatch.setattr(settings, "default_norm_method", "robust")
+        monkeypatch.setattr(settings, "default_boost_weight", 0.7)
+
+        engine = FaissRecommender(dimension=4)
+        assert (engine.metric, engine.boost_weight) == ("euclidean", 0.7)
+        assert FeatureNormalizer().method == "robust"
+        # Явно переданные значения важнее конфига, включая нулевой вес буста
+        assert FaissRecommender(dimension=4, boost_weight=0.0).boost_weight == 0.0
+
+    def test_eval_k_comes_from_config(self, monkeypatch):
+        from recommender.application.training.tune_recommender import evaluate
+        from recommender.config import settings
+
+        monkeypatch.setattr(settings, "tuning_eval_k", 3)
+        engine = FaissRecommender(dimension=3, metric="euclidean", boost_weight=0.0)
+        vectors = np.eye(3, dtype=np.float32)
+        engine.add_tracks(["a", "b", "c"], vectors.copy())
+
+        metrics = evaluate(engine, vectors, {"a": 0, "b": 1, "c": 2}, {"u": {"a", "b"}})
+
+        assert set(metrics) == {"track_hit@3", "track_mrr@3", "user_hit@3", "user_mrr@3"}
+
+
 class TestFeatureGroups:
     def test_apply_weights(self):
         from recommender.application.training.tune_recommender import (

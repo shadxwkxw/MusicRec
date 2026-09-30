@@ -50,6 +50,25 @@ async def test_rebuild_without_tracks_returns_400(api):
     assert resp.status_code == 400
 
 
+async def test_first_rebuild_uses_config_defaults(api, monkeypatch):
+    monkeypatch.setattr(settings, "default_metric", "euclidean")
+    monkeypatch.setattr(settings, "default_norm_method", "minmax")
+    monkeypatch.setattr(settings, "default_boost_weight", 0.9)
+
+    await api.seed(3)
+
+    engine = FaissRecommender.load()
+    assert (engine.metric, engine.boost_weight) == ("euclidean", 0.9)
+    assert app.state.normalizer.method == "minmax"
+
+
+async def test_tracks_page_limits_come_from_config(api):
+    too_big = settings.api_tracks_page_max + 1
+    assert (await api.client.get("/tracks", params={"limit": too_big})).status_code == 422
+    ok = await api.client.get("/tracks", params={"limit": settings.api_tracks_page_max})
+    assert ok.status_code == 200
+
+
 async def test_rebuild_indexes_everything_and_persists(api):
     ids = [(await api.upload(i))["id"] for i in range(3)]
 

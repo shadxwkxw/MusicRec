@@ -8,8 +8,9 @@
 
 Метрика: leave-one-out на лайках (см. evaluate) — для каждого пользователя
 прячем один лайкнутый трек и проверяем, где система ставит его в выдаче,
-построенной по остальным лайкам. Оптимизируется среднее MRR@10 по двум
-прод-путям: рекомендации по треку (с бустом) и по пользователю.
+построенной по остальным лайкам. Оптимизируется среднее MRR@k по двум
+прод-путям: рекомендации по треку и по пользователю (оба с бустом).
+Пространство поиска и k задаются в секции tuning конфига.
 
 Итог: индекс и нормализатор пересобраны с лучшими параметрами и
 сохранены на диск.
@@ -29,8 +30,6 @@ from recommender.infrastructure.data_processing.extract import bytes_to_features
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import AutoMLRunORM, LikeORM, TrackORM, utcnow
-
-EVAL_K = 10
 
 # Индексы групп признаков в 82-мерном векторе
 FEATURE_GROUPS = {
@@ -72,7 +71,7 @@ def evaluate(
     normalized: np.ndarray,
     id_to_idx: dict[str, int],
     user_likes: dict[str, set[str]],
-    k: int = EVAL_K,
+    k: int | None = None,
 ) -> dict[str, float]:
     """Leave-one-out по лайкам для обоих прод-путей рекомендаций.
 
@@ -82,6 +81,7 @@ def evaluate(
            бустом от них; спрятанный лайк так же убран из буста.
     Для каждого пути считаются hit@k и MRR@k.
     """
+    k = k or settings.tuning_eval_k
     ranks: dict[str, list[int | None]] = {"track": [], "user": []}
     for uid, liked in user_likes.items():
         if len(liked) < 2 or any(t not in id_to_idx for t in liked):
@@ -116,8 +116,10 @@ def evaluate(
     return metrics
 
 
-def objective_score(metrics: dict[str, float], k: int = EVAL_K) -> float:
-    return (metrics[f"track_mrr@{k}"] + metrics[f"user_mrr@{k}"]) / 2
+def objective_score(metrics: dict[str, float]) -> float:
+    """Среднее MRR@k по двум путям."""
+    mrr = [v for name, v in metrics.items() if "_mrr@" in name]
+    return sum(mrr) / len(mrr)
 
 
 async def run_tuning(db: AsyncSession, run_id: int) -> dict:
@@ -160,12 +162,14 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     await db.commit()
 
     def objective(trial: optuna.Trial) -> float:
-        norm_method = trial.suggest_categorical("norm_method", ["standard", "minmax", "robust"])
-        metric = trial.suggest_categorical("metric", ["cosine", "euclidean"])
-        boost_weight = trial.suggest_float("boost_weight", 0.0, 3.0)
+        norm_method = trial.suggest_categorical("norm_method", settings.tuning_norm_methods)
+        metric = trial.suggest_categorical("metric", settings.tuning_metrics)
+        boost_weight = trial.suggest_float("boost_weight", 0.0, settings.tuning_max_boost_weight)
 
         weights = {
-            group_name: trial.suggest_float(f"w_{group_name}", 0.0, 3.0)
+            group_name: trial.suggest_float(
+                f"w_{group_name}", 0.0, settings.tuning_max_feature_weight
+            )
             for group_name in FEATURE_GROUPS
         }
 

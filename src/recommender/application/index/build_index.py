@@ -1,8 +1,9 @@
 """Use case: полная пересборка FAISS-индекса из БД.
 
 Берёт все треки с фичами, заново фитит нормализатор и строит новый
-FAISS-индекс. Метод нормализации, веса признаков и метрика берутся из
-сохранённых артефактов (результат тюнинга); если их нет — standard + cosine.
+FAISS-индекс. Метод нормализации, веса признаков, метрика и вес буста берутся
+из сохранённых артефактов (результат тюнинга); если их нет — из конфига
+(recommendation.default_*).
 Артефакты сохраняются на диск.
 """
 
@@ -13,6 +14,7 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from recommender.config import settings
 from recommender.infrastructure.data_processing.extract import bytes_to_features
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
@@ -37,12 +39,12 @@ def _saved_params() -> tuple[str, np.ndarray | None, str, float]:
         prev_norm = FeatureNormalizer.load()
         method, weights = prev_norm.method, prev_norm.weights
     except FileNotFoundError:
-        method, weights = "standard", None
+        method, weights = settings.default_norm_method, None
     try:
         prev_engine = FaissRecommender.load()
         metric, boost_weight = prev_engine.metric, prev_engine.boost_weight
     except FileNotFoundError:
-        metric, boost_weight = "cosine", 0.3
+        metric, boost_weight = settings.default_metric, settings.default_boost_weight
     return method, weights, metric, boost_weight
 
 

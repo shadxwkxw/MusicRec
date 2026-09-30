@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from recommender.application.collaborative import co_like_strength, load_user_likes
+from recommender.config import settings
 from recommender.infrastructure.data_processing.extract import bytes_to_features
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
@@ -29,7 +30,7 @@ class BatchRecommendResult:
 async def run_batch_recommend(
     db: AsyncSession,
     output_path: Path,
-    top_n: int = 10,
+    top_n: int = settings.default_rec_limit,
     use_likes: bool = False,
 ) -> BatchRecommendResult:
     """Посчитать top-N похожих для каждого трека и выгрузить в файл.

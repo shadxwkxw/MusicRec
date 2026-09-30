@@ -18,13 +18,24 @@ audio:
   n_contrast_bands: 6    # librosa требует fmin*2^n_bands < sr/2; при sr=22050 максимум 6
 
 recommendation:
-  default_limit: 10
-  faiss_nprobe: 10
+  default_limit: 10          # сколько рекомендаций по умолчанию (API и batch --top-n)
+  candidate_multiplier: 3    # FAISS ищет limit * N кандидатов, чтобы хватило после фильтрации
+  # Параметры до первого тюнинга; после него берутся сохранённые артефакты
+  default_metric: cosine         # cosine | euclidean
+  default_norm_method: standard  # standard | minmax | robust
+  default_boost_weight: 0.3      # вес co-like буста
 
 tuning:
   n_trials: 50
-  timeout: 600             # Optuna timeout, seconds
+  timeout: 600               # Optuna timeout, seconds
+  eval_k: 10                 # hit@k и MRR@k в оценке
+  max_feature_weight: 3.0    # веса групп признаков ищутся в [0, max]
+  max_boost_weight: 3.0      # вес буста ищется в [0, max]
+  norm_methods: [standard, minmax, robust]
+  metrics: [cosine, euclidean]
 
 api:
   host: 0.0.0.0
   port: 8000
+  tracks_page_size: 50       # GET /tracks: limit по умолчанию
+  tracks_page_max: 200       # GET /tracks: максимальный limit

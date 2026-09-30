@@ -15,6 +15,7 @@ from pathlib import Path
 
 from recommender.application.batch_extract import run_batch_extract
 from recommender.application.batch_recommend import run_batch_recommend
+from recommender.config import settings
 from recommender.infrastructure.storage.postgres import async_session, init_db
 
 
@@ -35,6 +36,7 @@ async def _extract(args: argparse.Namespace) -> None:
 
 
 async def _recommend(args: argparse.Namespace) -> None:
+    await init_db()
     async with async_session() as session:
         result = await run_batch_recommend(
             db=session,
@@ -60,7 +62,7 @@ def main() -> None:
         "recommend", help="Precompute top-N recommendations for all tracks"
     )
     p_recommend.add_argument("--output", required=True, help="Output path (.csv or .parquet)")
-    p_recommend.add_argument("--top-n", type=int, default=10)
+    p_recommend.add_argument("--top-n", type=int, default=settings.default_rec_limit)
     p_recommend.add_argument(
         "--use-likes", action="store_true", help="Apply co-like boost from user likes"
     )

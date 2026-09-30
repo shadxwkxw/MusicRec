@@ -13,6 +13,7 @@ from recommender.application.collaborative import (
     compute_like_boost,
     compute_user_like_boost,
 )
+from recommender.config import settings
 from recommender.domain.models import Recommendation
 from recommender.domain.recommender import Recommender
 from recommender.infrastructure.data_processing.extract import bytes_to_features
@@ -33,7 +34,7 @@ async def recommend_by_track(
     db: AsyncSession,
     engine: Recommender,
     normalizer: FeatureNormalizer,
-    limit: int = 10,
+    limit: int = settings.default_rec_limit,
     use_likes: bool = True,
 ) -> list[Recommendation]:
     """Рекомендации по треку: контентное сходство + коллаборативный бустинг."""
@@ -60,7 +61,7 @@ async def recommend_for_user(
     db: AsyncSession,
     engine: Recommender,
     normalizer: FeatureNormalizer,
-    limit: int = 10,
+    limit: int = settings.default_rec_limit,
     use_likes: bool = True,
 ) -> list[Recommendation]:
     """Персональные рекомендации: усреднение векторов лайков + коллаборативный бустинг."""

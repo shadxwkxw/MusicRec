@@ -1,10 +1,14 @@
 """Фикстуры интеграционных тестов API.
 
-Каждый тест получает свою SQLite, свои папки audio/index/models и пустое
-состояние приложения — рабочая data/ не затрагивается. Lifespan не
+Каждый тест получает чистую БД (схема создаётся миграциями), свои папки
+audio/index/models и пустое состояние приложения — рабочая data/ не
+затрагивается. По умолчанию БД — временная SQLite; TEST_DATABASE_URL
+(например postgresql+asyncpg://...) прогоняет те же тесты на Postgres,
+схема public в ней пересоздаётся перед каждым тестом. Lifespan не
 запускается (ASGITransport его не вызывает), поэтому state задаётся вручную.
 """
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,12 +16,13 @@ import httpx
 import numpy as np
 import pytest
 import soundfile as sf
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from recommender.config import settings
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
-from recommender.infrastructure.storage.postgres import Base, get_db
+from recommender.infrastructure.storage.postgres import get_db, init_db
 from recommender.interfaces.online import routes
 from recommender.interfaces.online.main import app
 
@@ -45,17 +50,28 @@ def audio_files(tmp_path_factory) -> list[Path]:
 
 
 @pytest.fixture
-async def api(tmp_path, monkeypatch, audio_files):
+async def fresh_db(tmp_path):
+    """Пустая БД без схемы: временная SQLite или TEST_DATABASE_URL."""
+    db_url = os.getenv("TEST_DATABASE_URL")
+    db_engine = create_async_engine(db_url or f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
+    if db_url:
+        async with db_engine.begin() as conn:
+            await conn.execute(text("DROP SCHEMA public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+    yield db_engine
+    await db_engine.dispose()
+
+
+@pytest.fixture
+async def api(tmp_path, monkeypatch, audio_files, fresh_db):
     for name in ("audio_dir", "index_dir", "models_dir"):
         folder = tmp_path / name
         folder.mkdir()
         monkeypatch.setattr(settings, name, folder)
     monkeypatch.setattr(settings, "automl_n_trials", 4)
 
-    db_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sessions = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+    await init_db(fresh_db)
+    sessions = async_sessionmaker(fresh_db, class_=AsyncSession, expire_on_commit=False)
 
     async def _get_db():
         async with sessions() as session:
@@ -94,4 +110,3 @@ async def api(tmp_path, monkeypatch, audio_files):
         yield SimpleNamespace(client=client, sessions=sessions, upload=upload, seed=seed, like=like)
 
     app.dependency_overrides.clear()
-    await db_engine.dispose()

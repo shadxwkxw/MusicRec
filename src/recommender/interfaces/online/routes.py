@@ -142,7 +142,7 @@ def _to_response(track: TrackORM, indexed_ids: set[str]) -> TrackResponse:
 async def get_all_tracks(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(settings.api_tracks_page_size, ge=1, le=settings.api_tracks_page_max),
     offset: int = Query(0, ge=0),
 ):
     result = await db.execute(
@@ -232,7 +232,7 @@ async def _enrich(db: AsyncSession, recs) -> list[RecommendationItem]:
 async def get_recommendations(
     request: Request,
     track_id: str,
-    limit: int = 10,
+    limit: int = settings.default_rec_limit,
     use_likes: bool = True,
     db: AsyncSession = Depends(get_db),
 ):
@@ -259,7 +259,7 @@ async def get_recommendations(
 async def get_user_recommendations(
     request: Request,
     user_id: str,
-    limit: int = 10,
+    limit: int = settings.default_rec_limit,
     use_likes: bool = True,
     db: AsyncSession = Depends(get_db),
 ):

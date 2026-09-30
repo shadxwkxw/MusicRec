@@ -7,10 +7,10 @@
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 ENV_VAR_PATTERN = re.compile(r"^\$\{([^}]+)\}$")
 
@@ -39,6 +39,10 @@ def _resolve_env(value: Any) -> Any:
     return resolved
 
 
+Metric = Literal["cosine", "euclidean"]
+NormMethod = Literal["standard", "minmax", "robust"]
+
+
 class Settings(BaseModel):
     # Paths
     data_dir: Path
@@ -54,14 +58,24 @@ class Settings(BaseModel):
     n_chroma: int
     n_contrast_bands: int
     # Recommendation
-    default_rec_limit: int
-    faiss_nprobe: int
+    default_rec_limit: int = Field(ge=1)
+    candidate_multiplier: int = Field(ge=1)
+    default_metric: Metric
+    default_norm_method: NormMethod
+    default_boost_weight: float = Field(ge=0)
     # Tuning
-    automl_n_trials: int
-    automl_timeout: int
+    automl_n_trials: int = Field(ge=1)
+    automl_timeout: int = Field(ge=1)
+    tuning_eval_k: int = Field(ge=1)
+    tuning_max_feature_weight: float = Field(gt=0)
+    tuning_max_boost_weight: float = Field(ge=0)
+    tuning_norm_methods: list[NormMethod] = Field(min_length=1)
+    tuning_metrics: list[Metric] = Field(min_length=1)
     # API
     api_host: str
     api_port: int
+    api_tracks_page_size: int = Field(ge=1)
+    api_tracks_page_max: int = Field(ge=1)
 
     @property
     def feature_dim(self) -> int:
@@ -111,11 +125,21 @@ def _build_settings(raw: dict) -> Settings:
         n_chroma=raw["audio"]["n_chroma"],
         n_contrast_bands=raw["audio"]["n_contrast_bands"],
         default_rec_limit=raw["recommendation"]["default_limit"],
-        faiss_nprobe=raw["recommendation"]["faiss_nprobe"],
+        candidate_multiplier=raw["recommendation"]["candidate_multiplier"],
+        default_metric=raw["recommendation"]["default_metric"],
+        default_norm_method=raw["recommendation"]["default_norm_method"],
+        default_boost_weight=raw["recommendation"]["default_boost_weight"],
         automl_n_trials=raw["tuning"]["n_trials"],
         automl_timeout=raw["tuning"]["timeout"],
+        tuning_eval_k=raw["tuning"]["eval_k"],
+        tuning_max_feature_weight=raw["tuning"]["max_feature_weight"],
+        tuning_max_boost_weight=raw["tuning"]["max_boost_weight"],
+        tuning_norm_methods=raw["tuning"]["norm_methods"],
+        tuning_metrics=raw["tuning"]["metrics"],
         api_host=raw["api"]["host"],
         api_port=raw["api"]["port"],
+        api_tracks_page_size=raw["api"]["tracks_page_size"],
+        api_tracks_page_max=raw["api"]["tracks_page_max"],
     )
 
 

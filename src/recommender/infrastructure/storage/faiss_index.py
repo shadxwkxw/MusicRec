@@ -12,7 +12,7 @@ import faiss
 import numpy as np
 from joblib import dump, load
 
-from recommender.config import settings
+from recommender.config import Metric, settings
 from recommender.domain.models import Recommendation
 from recommender.domain.recommender import Recommender
 
@@ -23,12 +23,12 @@ class FaissRecommender(Recommender):
     def __init__(
         self,
         dimension: int | None = None,
-        metric: str = "cosine",
-        boost_weight: float = 0.3,
+        metric: Metric | None = None,
+        boost_weight: float | None = None,
     ):
         self.dimension = dimension or settings.feature_dim
-        self.metric = metric
-        self.boost_weight = boost_weight
+        self.metric = metric or settings.default_metric
+        self.boost_weight = settings.default_boost_weight if boost_weight is None else boost_weight
         self.index = self._new_index()
         self.track_ids: list[str] = []
 
@@ -51,7 +51,7 @@ class FaissRecommender(Recommender):
     def recommend(
         self,
         query_features: np.ndarray,
-        limit: int = 10,
+        limit: int = settings.default_rec_limit,
         exclude_ids: set[str] | None = None,
         like_boost: dict[str, float] | None = None,
     ) -> list[Recommendation]:
@@ -65,7 +65,11 @@ class FaissRecommender(Recommender):
         # Берём с запасом, чтобы хватило после фильтрации.
         # При наличии like_boost сканируем весь индекс — иначе сильный буст
         # не сможет поднять трек, который не попал в топ-K поиска.
-        search_k = self.index.ntotal if like_boost else min(limit * 3, self.index.ntotal)
+        search_k = (
+            self.index.ntotal
+            if like_boost
+            else min(limit * settings.candidate_multiplier, self.index.ntotal)
+        )
         distances, indices = self.index.search(query, search_k)
 
         exclude_ids = exclude_ids or set()
@@ -127,7 +131,7 @@ class FaissRecommender(Recommender):
         engine = cls(
             dimension=meta["dim"],
             metric=meta["metric"],
-            boost_weight=meta.get("boost_weight", 0.3),
+            boost_weight=meta.get("boost_weight", settings.default_boost_weight),
         )
         engine.index = faiss.read_index(str(path / "faiss.index"))
         engine.track_ids = meta["track_ids"]

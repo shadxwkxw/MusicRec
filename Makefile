@@ -2,7 +2,8 @@
         lint format typecheck clean \
         docker-build docker-up docker-down docker-logs \
         batch-extract batch-recommend \
-        docker-batch-extract docker-batch-recommend
+        docker-batch-extract docker-batch-recommend \
+        migrate migration db-copy
 
 VENV := .venv
 PY   := $(VENV)/bin/python
@@ -25,6 +26,23 @@ upgrade:
 
 run:
 	$(VENV)/bin/uvicorn recommender.interfaces.online.main:app --reload --port 8000
+
+# ── Database ─────────────────────────────────────────────────────
+# БД выбирается через DB_URL (по умолчанию локальная SQLite из configs/config.yaml).
+# Сервисы применяют миграции сами при старте; migrate — чтобы сделать это явно.
+migrate:
+	$(VENV)/bin/alembic upgrade head
+
+# Новая миграция по изменениям моделей: make migration MSG="add genre to tracks"
+migration:
+	@test -n "$(MSG)" || (echo 'usage: make migration MSG="..."' && exit 1)
+	$(VENV)/bin/alembic revision --autogenerate -m "$(MSG)"
+
+# Перенос данных в пустую базу, по умолчанию из локальной SQLite в Postgres из docker-compose
+COPY_FROM ?= sqlite+aiosqlite:///data/recommender.db
+COPY_TO   ?= postgresql+asyncpg://recommender:recommender@localhost:5432/recommender
+db-copy:
+	$(PY) scripts/copy_db.py --source "$(COPY_FROM)" --target "$(COPY_TO)"
 
 test:
 	$(VENV)/bin/pytest tests/ -v

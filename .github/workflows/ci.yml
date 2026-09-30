@@ -97,6 +97,36 @@ jobs:
           name: coverage-html
           path: htmlcov/
 
+  postgres:
+    name: Integration tests on Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: recommender_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d recommender_test"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/recommender_test
+      DB_URL: postgresql+asyncpg://test:test@localhost:5432/recommender_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
+      - run: make install
+      - run: make test-integration
+      - name: Models match migrations
+        run: make migrate && .venv/bin/alembic check
+
   smoke:
     name: Smoke (uvicorn + restart + batch CLI)
     runs-on: ubuntu-latest
@@ -141,7 +171,7 @@ jobs:
 
   docker:
     name: Docker image (${{ matrix.service }})
-    needs: [unit, integration, smoke]
+    needs: [unit, integration, postgres, smoke]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

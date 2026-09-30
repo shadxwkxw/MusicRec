@@ -1,9 +1,32 @@
+x-db-env: &db-env
+  DB_URL: postgresql+asyncpg://recommender:recommender@postgres:5432/recommender
+
 services:
+  postgres:
+    image: postgres:17
+    container_name: recommender-postgres
+    environment:
+      POSTGRES_USER: recommender
+      POSTGRES_PASSWORD: recommender
+      POSTGRES_DB: recommender
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recommender -d recommender"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   recommender-online:
     build:
       context: .
       dockerfile: services/online/Dockerfile
     container_name: recommender-online
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8000:8000"
     volumes:
@@ -12,8 +35,10 @@ services:
       - ./services:/app/services
       - ./configs:/app/configs
     environment:
-      - PYTHONUNBUFFERED=1
-      - PYTHONPATH=/app/src:/app
+      <<: *db-env
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /app/src:/app
+    # Миграции применяются при старте (init_db в lifespan)
     command: uvicorn recommender.interfaces.online.main:app --host 0.0.0.0 --port 8000 --reload
 
   recommender-batch:
@@ -22,6 +47,9 @@ services:
       dockerfile: services/batch/Dockerfile
     container_name: recommender-batch
     profiles: ["batch"]
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
       - ./src:/app/src
@@ -29,8 +57,12 @@ services:
       - ./configs:/app/configs
       - ./artifacts:/app/artifacts
     environment:
-      - PYTHONUNBUFFERED=1
-      - PYTHONPATH=/app/src:/app
+      <<: *db-env
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /app/src:/app
     # Команда передаётся через docker compose run:
     # docker compose --profile batch run --rm recommender-batch extract --input-dir /app/data/audio
     # docker compose --profile batch run --rm recommender-batch recommend --output /app/artifacts/recs.parquet
+
+volumes:
+  postgres-data:

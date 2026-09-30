@@ -13,7 +13,7 @@ import numpy as np
 from joblib import dump, load
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 
-from recommender.config import settings
+from recommender.config import NormMethod, settings
 
 SCALER_CLASSES = {
     "standard": StandardScaler,
@@ -25,7 +25,8 @@ SCALER_CLASSES = {
 class FeatureNormalizer:
     """Обёртка над sklearn-скейлерами с сохранением/загрузкой."""
 
-    def __init__(self, method: str = "standard", weights: np.ndarray | None = None):
+    def __init__(self, method: NormMethod | None = None, weights: np.ndarray | None = None):
+        method = method or settings.default_norm_method
         if method not in SCALER_CLASSES:
             raise ValueError(f"Unknown method: {method}. Choose from {list(SCALER_CLASSES)}")
         self.method = method

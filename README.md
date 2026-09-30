@@ -151,12 +151,45 @@ make batch-recommend OUTPUT=artifacts/recs.parquet TOP_N=10
 
 Колонки выгрузки: `source_track_id`, `rank`, `target_track_id`, `score`.
 
+## База данных
+
+По умолчанию — локальная SQLite (`data/recommender.db`), для этого ничего
+настраивать не нужно. Postgres включается через `DB_URL`, например
+`postgresql+asyncpg://user:pass@host:5432/db`; в `docker-compose` он уже
+настроен.
+
+Схема ведётся миграциями Alembic (`src/recommender/infrastructure/storage/migrations/`).
+Online-сервис и batch CLI применяют их сами при старте. В Postgres миграции
+берут advisory lock, поэтому сервисы, стартующие одновременно, мигрируют по
+очереди. База, созданная до появления миграций, подхватывается
+автоматически, данные не меняются.
+
+```bash
+make migrate                               # применить миграции явно
+make migration MSG="add genre to tracks"   # новая миграция по изменениям моделей
+make db-copy                               # перенести данные из SQLite в Postgres из docker-compose
+```
+
+`make db-copy` пишет только в пустую базу и сохраняет id. Источник и цель
+задаются через `COPY_FROM` и `COPY_TO`.
+
 ## Конфигурация
 
-Настройки лежат в [`configs/config.yaml`](configs/config.yaml): пути к данным,
-URL базы, параметры извлечения признаков и тюнинга. Поддерживаются
+Настройки лежат в [`configs/config.yaml`](configs/config.yaml). Поддерживаются
 подстановки `${VAR}` и `${VAR:-default}`, например URL базы берётся из
 `DB_URL`.
+
+| Секция | Что настраивает |
+|---|---|
+| `paths` | папки для аудио, индекса и моделей |
+| `database` | URL базы |
+| `audio` | частота дискретизации, длительность анализа, число MFCC, chroma и полос контраста |
+| `recommendation` | лимит выдачи по умолчанию (API и batch `--top-n`), запас кандидатов для FAISS и параметры до первого тюнинга: метрика, нормализация, вес буста |
+| `tuning` | число попыток и таймаут Optuna, k для hit@k / MRR@k, верхние границы весов признаков и буста, какие методы нормализации и метрики перебирать |
+| `api` | хост и порт для `recommender-online`, размер страницы `GET /tracks` и его максимум |
+
+Значения проверяются при старте: неизвестная метрика или метод нормализации,
+отрицательный вес и т.п. остановят сервис с понятной ошибкой.
 
 Конфиг ищется так: `$CONFIG_PATH` → `./configs/config.yaml` → копия,
 встроенная в пакет (`src/recommender/default_config.yaml`).
@@ -164,11 +197,15 @@ URL базы, параметры извлечения признаков и тю
 `n_contrast_bands` не может быть больше 6 при `sample_rate: 22050`: верхняя
 полоса иначе выходит за частоту Найквиста.
 
+`src/recommender/default_config.yaml` должен совпадать с `configs/config.yaml`
+(это проверяет тест): при правке конфига меняй оба файла.
+
 ## Разработка
 
 | Команда | Что делает |
 |---|---|
 | `make install` | окружение строго по `uv.lock` |
+| `make migrate` / `migration MSG=...` / `db-copy` | миграции и перенос данных, см. «База данных» |
 | `make lock` | обновить `uv.lock` после правки зависимостей в `pyproject.toml` |
 | `make upgrade` | поднять зависимости до свежих версий и переустановить |
 | `make test` / `test-unit` / `test-integration` | тесты |
@@ -180,7 +217,9 @@ URL базы, параметры извлечения признаков и тю
 | `make build` | собрать wheel |
 
 Интеграционные тесты и `make smoke` работают во временных папках со своей
-SQLite и не трогают `data/`.
+SQLite и не трогают `data/`. Схема в тестах создаётся миграциями. Чтобы
+прогнать интеграционные тесты на Postgres, задай `TEST_DATABASE_URL`: схема
+`public` в этой базе пересоздаётся перед каждым тестом.
 
 ### CI
 
@@ -194,6 +233,7 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) на pus
 | audit | уязвимости в зависимостях |
 | unit | юнит-тесты на Python 3.11–3.14 |
 | integration | все тесты + покрытие (отчёт в summary и артефактах) |
+| postgres | интеграционные тесты на Postgres 17 и `alembic check`: модели совпадают с миграциями |
 | smoke | `make smoke` |
 | build | wheel ставится в чистое окружение и запускается вне репозитория |
 | docker | сборка образов online и batch после прохождения тестов |
@@ -201,12 +241,14 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) на pus
 ## Docker
 
 ```bash
-make docker-build && make docker-up      # online-сервис на :8000
+make docker-build && make docker-up      # Postgres + online-сервис на :8000
+make db-copy                             # один раз: перенести локальные данные в Postgres
 make docker-batch-extract INPUT_DIR=data/audio
 make docker-batch-recommend OUTPUT=artifacts/recs.parquet TOP_N=10
 ```
 
-Образы ставят зависимости из `uv.lock`. `docker-compose.yml` монтирует
+Образы ставят зависимости из `uv.lock`. Postgres хранит данные в volume
+`postgres-data` и доступен с хоста на `localhost:5432`. `docker-compose.yml` монтирует
 `data/`, `configs/` и исходники, поэтому online-сервис перезапускается при
 правках кода.
 
@@ -219,7 +261,7 @@ src/recommender/
                            тюнинг, batch extract / recommend
   infrastructure/
     data_processing/       извлечение признаков (librosa), нормализатор
-    storage/               SQLAlchemy-модели и сессии, FAISS-индекс
+    storage/               SQLAlchemy-модели и сессии, миграции Alembic, FAISS-индекс
   interfaces/online/       FastAPI: роуты, схемы, приложение
   default_config.yaml      конфиг по умолчанию внутри пакета
 services/
@@ -227,18 +269,18 @@ services/
   batch/                   CLI (extract / recommend) + Dockerfile
 configs/config.yaml        основной конфиг
 scripts/smoke_test.py      end-to-end проверка
+scripts/copy_db.py         перенос данных между базами
+alembic.ini                конфиг CLI Alembic
 tests/unit/                юнит-тесты
 tests/integration/         тесты API на временной SQLite
 ```
 
 ## Известные ограничения
 
-- Хранилище — SQLite через `aiosqlite`, хотя модуль называется `postgres.py`.
-  Схема создаётся через `create_all`, миграций нет: изменение моделей
-  требует ручной правки базы.
+- Online-сервис держит индекс в памяти: если индекс пересобран другим
+  процессом (batch CLI), сервис узнает об этом только после рестарта.
 - Индекс `IndexFlat` — точный полный перебор; каждая загрузка и удаление
   перезаписывают индекс на диске целиком. Для десятков тысяч треков нужен
   приближённый индекс и периодическое сохранение.
-- `recommendation.default_limit`, `recommendation.faiss_nprobe` и секция
-  `api` в конфиге пока не используются: лимит по умолчанию (10) и порт (8000)
-  заданы в коде.
+- `make run` и `docker-compose` запускают uvicorn напрямую на порту 8000;
+  `api.host` и `api.port` действуют только на точку входа `recommender-online`.

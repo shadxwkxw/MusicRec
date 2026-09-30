@@ -7,8 +7,23 @@
 import datetime
 from collections.abc import AsyncIterator
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, LargeBinary, String
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import (
+    Column,
+    Connection,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    inspect,
+)
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 from recommender.config import settings
@@ -64,9 +79,30 @@ engine = create_async_engine(settings.db_url, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
-async def init_db() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+MIGRATIONS = "recommender.infrastructure.storage:migrations"
+BASELINE_REVISION = "0001"
+
+
+def _upgrade_to_head(connection: Connection) -> None:
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config()
+    cfg.set_main_option("script_location", MIGRATIONS)
+    cfg.attributes["connection"] = connection
+
+    tables = set(inspect(connection).get_table_names())
+    if "tracks" in tables and "alembic_version" not in tables:
+        # База создана через create_all до появления миграций: её схема
+        # совпадает с базовой ревизией, помечаем и мигрируем дальше как обычно.
+        command.stamp(cfg, BASELINE_REVISION)
+    command.upgrade(cfg, "head")
+
+
+async def init_db(db_engine: AsyncEngine | None = None) -> None:
+    """Довести схему БД до последней миграции (alembic upgrade head)."""
+    async with (db_engine or engine).begin() as conn:
+        await conn.run_sync(_upgrade_to_head)
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
