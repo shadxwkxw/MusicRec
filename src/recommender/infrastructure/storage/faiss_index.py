@@ -73,26 +73,37 @@ class FaissRecommender(Recommender):
         )
         distances, indices = self.index.search(query, search_k)
 
+        candidates = [
+            (self.track_ids[idx], float(dist))
+            for dist, idx in zip(distances[0], indices[0], strict=True)
+            if 0 <= idx < len(self.track_ids) and self.track_ids[idx] not in exclude_ids
+        ]
+        scale = self._boost_scale([s for _, s in candidates]) if like_boost else 0.0
+
         results: list[Recommendation] = []
-
-        for dist, idx in zip(distances[0], indices[0], strict=True):
-            if idx < 0 or idx >= len(self.track_ids):
-                continue
-            track_id = self.track_ids[idx]
-            if track_id in exclude_ids:
-                continue
-
-            score = float(dist)
+        for track_id, score in candidates:
             if like_boost and track_id in like_boost:
-                bonus = like_boost[track_id] * self.boost_weight
+                bonus = like_boost[track_id] * self.boost_weight * scale
                 # cosine: больше = ближе, L2: меньше = ближе
                 score = score + bonus if self.metric == "cosine" else score - bonus
-
             results.append(Recommendation(track_id=track_id, score=score))
 
         # Для cosine больше = лучше, для L2 меньше = лучше
         results.sort(key=lambda r: r.score, reverse=(self.metric == "cosine"))
         return results[:limit]
+
+    def _boost_scale(self, scores: list[float]) -> float:
+        """Разрыв между ближайшим и медианным кандидатом: единица измерения буста.
+
+        Масштаб скоров зависит от метрики, нормализации и весов признаков
+        (для L2 это квадраты расстояний, десятки и сотни), поэтому вес буста
+        задаётся в долях этого разрыва, а не в абсолютных единицах.
+        """
+        if not scores:
+            return 0.0
+        best = max(scores) if self.metric == "cosine" else min(scores)
+        gap = abs(float(np.median(scores)) - best)
+        return gap if gap > 0 else 1.0
 
     def remove_tracks(self, track_ids: set[str]) -> int:
         positions = [i for i, tid in enumerate(self.track_ids) if tid in track_ids]

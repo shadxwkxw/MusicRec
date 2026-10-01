@@ -167,6 +167,39 @@ class TestFaissRecommender:
 
         assert boosted[0].track_id == target
 
+    @pytest.mark.parametrize("metric", ["cosine", "euclidean"])
+    def test_boost_effect_does_not_depend_on_feature_scale(self, metric):
+        # Растяжение пространства (другая нормализация, веса признаков) меняет
+        # масштаб скоров, но не должно менять то, насколько буст двигает треки
+        features = np.random.default_rng(1).standard_normal((60, 16)).astype(np.float32)
+        boost = {f"t{i}": 1.0 for i in range(30, 40)}
+
+        def ranking(scale: float) -> list[str]:
+            engine = FaissRecommender(dimension=16, metric=metric, boost_weight=0.5)
+            engine.add_tracks([f"t{i}" for i in range(60)], features * scale)
+            recs = engine.recommend(features[0] * scale, limit=20, like_boost=boost)
+            return [r.track_id for r in recs]
+
+        assert ranking(1.0) == ranking(10.0)
+        # и буст при этом действительно что-то меняет
+        engine = FaissRecommender(dimension=16, metric=metric, boost_weight=0.5)
+        engine.add_tracks([f"t{i}" for i in range(60)], features.copy())
+        plain = [r.track_id for r in engine.recommend(features[0], limit=20)]
+        assert ranking(1.0) != plain
+
+    def test_full_boost_lifts_typical_track_to_nearest_level(self):
+        # Вес 1.0 при силе 1.0 сдвигает трек на разрыв между ближайшим и медианным
+        features = np.array([[0.0], [1.0], [2.0], [3.0], [4.0]], dtype=np.float32)
+        engine = FaissRecommender(dimension=1, metric="euclidean", boost_weight=1.0)
+        engine.add_tracks(["q", "a", "b", "c", "d"], features)
+
+        recs = engine.recommend(np.array([0.0]), limit=4, exclude_ids={"q"}, like_boost={"c": 1.0})
+
+        # Кандидаты a..d: L2² = 1, 4, 9, 16; ближайший 1, медиана 6.5 → c: 9 − 5.5 = 3.5
+        scores = {r.track_id: r.score for r in recs}
+        assert scores["c"] == pytest.approx(9 - (6.5 - 1))
+        assert [r.track_id for r in recs][:2] == ["a", "c"]
+
     def test_boost_weight_survives_save_load(self, tmp_path):
         engine = FaissRecommender(dimension=58, metric="euclidean", boost_weight=0.17)
         engine.add_tracks(["a"], np.random.randn(1, 58).astype(np.float32))

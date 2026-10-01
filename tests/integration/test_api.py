@@ -16,6 +16,15 @@ async def _tracks(api) -> dict[str, dict]:
     return {t["id"]: t for t in resp.json()}
 
 
+def _expected_bonus(candidate_scores, strength: float = 1.0) -> float:
+    """Прибавка буста (cosine): вес × сила × разрыв между ближайшим и медианным кандидатом.
+
+    Работает, когда в выдаче без буста все кандидаты, — так в этих тестах.
+    """
+    scores = list(candidate_scores)
+    return app.state.engine.boost_weight * strength * (max(scores) - float(np.median(scores)))
+
+
 async def _recs(api, track_id: str, **params) -> list[dict]:
     resp = await api.client.get(f"/recommendations/{track_id}", params=params)
     assert resp.status_code == 200, resp.text
@@ -157,7 +166,7 @@ async def test_like_boost_raises_only_co_liked_track(api):
     plain = {r["track_id"]: r["score"] for r in await _recs(api, a, use_likes=False)}
     boosted = {r["track_id"]: r["score"] for r in await _recs(api, a, use_likes=True)}
 
-    bonus = app.state.engine.boost_weight
+    bonus = _expected_bonus(plain.values())
     assert boosted[c] == pytest.approx(plain[c] + bonus, abs=1e-3)
     assert boosted[b] == pytest.approx(plain[b], abs=1e-3)
     assert boosted[d] == pytest.approx(plain[d], abs=1e-3)
@@ -193,7 +202,7 @@ async def test_user_like_boost_raises_only_neighbour_liked_track(api):
 
     plain, boosted = await scores(False), await scores(True)
 
-    bonus = app.state.engine.boost_weight
+    bonus = _expected_bonus(plain.values())
     assert boosted[c] == pytest.approx(plain[c] + bonus, abs=1e-3)
     assert boosted[d] == pytest.approx(plain[d], abs=1e-3)
     assert boosted[e] == pytest.approx(plain[e], abs=1e-3)
@@ -224,7 +233,7 @@ async def test_batch_recommend_with_and_without_likes(api, tmp_path):
         row = df[(df.source_track_id == src) & (df.target_track_id == dst)]
         return float(row.score.iloc[0])
 
-    bonus = app.state.engine.boost_weight
+    bonus = _expected_bonus(plain[plain.source_track_id == a].score)
     assert score(boosted, a, c) == pytest.approx(score(plain, a, c) + bonus, abs=1e-3)
     assert score(boosted, a, b) == pytest.approx(score(plain, a, b), abs=1e-3)
 

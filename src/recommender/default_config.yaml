@@ -23,14 +23,14 @@ recommendation:
   # Параметры до первого тюнинга; после него берутся сохранённые артефакты
   default_metric: cosine         # cosine | euclidean
   default_norm_method: standard  # standard | minmax | robust
-  default_boost_weight: 0.3      # вес co-like буста
+  default_boost_weight: 0.3      # вес co-like буста в долях разрыва «ближайший — типичный трек»
 
 tuning:
   n_trials: 50
   timeout: 600               # Optuna timeout, seconds
   eval_k: 10                 # hit@k и MRR@k в оценке
   max_feature_weight: 3.0    # веса групп признаков ищутся в [0, max]
-  max_boost_weight: 3.0      # вес буста ищется в [0, max]
+  max_boost_weight: 3.0      # вес буста ищется в [0, max]; 1.0 поднимает типичный трек до ближайшего
   norm_methods: [standard, minmax, robust]
   metrics: [cosine, euclidean]
   # Цель подбора параметров признаков: genre — доля того же жанра среди соседей
