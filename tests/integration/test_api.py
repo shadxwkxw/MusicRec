@@ -92,6 +92,31 @@ async def test_upload_after_rebuild_is_indexed_and_saved(api):
     assert track["id"] in FaissRecommender.load().track_ids
 
 
+async def test_reload_picks_up_index_rebuilt_outside_the_service(api, audio_files):
+    from recommender.application.batch_extract import run_batch_extract
+    from recommender.application.index.build_index import rebuild_index
+
+    await api.seed(2)
+
+    # Как DAG: batch-процесс импортирует треки и пересобирает индекс на диске
+    async with api.sessions() as db:
+        await run_batch_extract(audio_files[0].parent, db)
+        await rebuild_index(db)
+
+    stale = await _tracks(api)
+    assert sum(t["indexed"] for t in stale.values()) == 2  # сервис ещё на старом индексе
+
+    resp = await api.client.post("/index/reload")
+
+    assert resp.status_code == 200
+    assert resp.json()["tracks_indexed"] == len(stale) == 2 + len(audio_files)
+    assert all(t["indexed"] for t in (await _tracks(api)).values())
+
+
+async def test_reload_without_saved_index_returns_409(api):
+    assert (await api.client.post("/index/reload")).status_code == 409
+
+
 async def test_features_endpoint(api):
     track = await api.upload(0)
 
@@ -217,6 +242,23 @@ async def test_patch_updates_only_given_fields(api):
     assert (await _tracks(api))[track["id"]]["title"] == "New"
 
 
+async def test_genre_is_stored_returned_and_editable(api, audio_files):
+    with audio_files[0].open("rb") as f:
+        resp = await api.client.post(
+            "/tracks/upload",
+            files={"file": ("a.wav", f, "audio/wav")},
+            data={"title": "T", "genre": "Rock"},
+        )
+    track = resp.json()
+    assert track["genre"] == "Rock"
+    assert (await api.upload(1))["genre"] is None
+
+    resp = await api.client.patch(f"/tracks/{track['id']}", json={"genre": "Jazz"})
+
+    assert resp.json()["genre"] == "Jazz"
+    assert (await _tracks(api))[track["id"]]["genre"] == "Jazz"
+
+
 async def test_patch_validation(api):
     track = await api.upload(0)
 
@@ -279,6 +321,16 @@ async def test_tuning_params_reach_queries_and_survive_rebuild(api):
     run = await _run_tuning(api)
 
     assert run["status"] == "completed"
+    # По 3 лайка у пользователя: 1 в тест, 2 на подбор
+    assert run["metrics"]["test_likes"] == 2
+    assert set(run["metrics"]["holdout"]) == {
+        "system",
+        "content_only",
+        "same_artist",
+        "popularity",
+        "random",
+    }
+    assert "track_mrr@10" in run["metrics"]["train"]
     best = run["best_params"]
     engine, normalizer = app.state.engine, app.state.normalizer
     assert engine.metric == best["metric"]

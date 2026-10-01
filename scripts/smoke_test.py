@@ -174,6 +174,22 @@ def main() -> None:
             subprocess.run([*batch, "extract", "--input-dir", str(inbox)], env=env, check=True)
             check(track_count() == before + 2, "batch extract skips already imported files")
 
+            print("batch rebuild / tune + reload on a running server")
+            with Server(env, log) as api:
+
+                def indexed() -> int:
+                    return sum(t["indexed"] for t in api.get("/tracks").json())
+
+                check(indexed() == before, "running server doesn't see batch-imported tracks yet")
+                subprocess.run([*batch, "rebuild"], env=env, check=True)
+                reloaded = api.post("/index/reload").json()
+                check(reloaded["tracks_indexed"] == track_count(), "reload picked up CLI rebuild")
+                check(indexed() == track_count(), "all tracks indexed after reload")
+
+                subprocess.run([*batch, "tune"], env=env, check=True)
+                check(api.get("/automl/status").json()[0]["status"] == "completed", "CLI tune")
+                check(api.post("/index/reload").status_code == 200, "reload after CLI tune")
+
             out = work / "recs.parquet"
             subprocess.run(
                 [*batch, "recommend", "--output", str(out), "--top-n", "3"], env=env, check=True

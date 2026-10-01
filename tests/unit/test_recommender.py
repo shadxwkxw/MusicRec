@@ -134,6 +134,15 @@ class TestFaissRecommender:
         rec_ids = {r.track_id for r in recs}
         assert rec_ids.isdisjoint(exclude)
 
+    def test_many_excluded_neighbours_still_fill_the_limit(self):
+        engine, _ids, features = self._make_engine(n_tracks=200)
+        nearest = {r.track_id for r in engine.recommend(features[0], limit=60)}
+
+        recs = engine.recommend(features[0], limit=10, exclude_ids=nearest)
+
+        assert len(recs) == 10
+        assert {r.track_id for r in recs}.isdisjoint(nearest)
+
     def test_like_boost(self):
         engine, _ids, features = self._make_engine()
         boost = {"track_49": 100.0}
@@ -245,7 +254,7 @@ class TestEvaluate:
         return engine, vectors, {t: i for i, t in enumerate(ids)}
 
     def test_ranks_for_both_paths(self):
-        from recommender.application.training.tune_recommender import evaluate
+        from recommender.application.training.evaluation import evaluate
 
         engine, vectors, id_to_idx = self._setup(
             {
@@ -271,7 +280,7 @@ class TestEvaluate:
         assert metrics["user_mrr@3"] == pytest.approx(0.5)
 
     def test_hidden_like_does_not_leak_into_boost(self):
-        from recommender.application.training.tune_recommender import evaluate
+        from recommender.application.training.evaluation import evaluate
 
         engine, vectors, id_to_idx = self._setup(
             {"a": [1, 0, 0], "b": [0.9, 0.1, 0], "x": [0, 0, 1], "c": [0, 0.1, 1]},
@@ -282,6 +291,136 @@ class TestEvaluate:
 
         # Без утечки ближайшими остаются b и c; с утечкой буст поднял бы спрятанный лайк
         assert metrics["track_hit@1"] == 0.0
+
+
+class TestHoldout:
+    def test_split_keeps_train_for_everyone_and_is_deterministic(self):
+        from recommender.application.training.evaluation import split_likes
+
+        likes = {
+            "big": {f"t{i}" for i in range(10)},
+            "pair": {"a", "b"},
+            "single": {"s"},
+        }
+
+        train, test = split_likes(likes, test_fraction=0.2, seed=1)
+
+        assert len(test["big"]) == 2 and len(train["big"]) == 8
+        assert len(test["pair"]) == 1 and len(train["pair"]) == 1
+        assert "single" not in test and train["single"] == {"s"}
+        for user, liked in likes.items():
+            assert train[user] | test.get(user, set()) == liked
+            assert not train[user] & test.get(user, set())
+        assert split_likes(likes, 0.2, seed=1) == (train, test)
+
+    def test_expected_random_matches_formula(self):
+        from recommender.application.training.evaluation import Query, expected_random
+
+        query = Query("user", ("q",), frozenset({"q"}), "x", {})
+
+        metrics = expected_random([query], n_tracks=11, k=10)
+
+        # 10 кандидатов, k=10: цель точно в выдаче, MRR = H_10 / 10
+        assert metrics["user_hit@10"] == pytest.approx(1.0)
+        assert metrics["user_mrr@10"] == pytest.approx(sum(1 / r for r in range(1, 11)) / 10)
+
+    def test_baselines_rank_as_expected(self):
+        from recommender.application.training.evaluation import (
+            Query,
+            popularity_ranker,
+            same_artist_ranker,
+        )
+
+        ids = ["a1", "a2", "b1", "b2"]
+        artists = {"a1": "A", "a2": "A", "b1": "B", "b2": "B"}
+        train = {"u1": {"b2"}, "u2": {"b2", "a2"}}
+        query = Query("track", ("a1",), frozenset({"a1"}), "a2", train)
+
+        assert popularity_ranker(ids, train)(query, 3) == ["b2", "a2", "b1"]
+        assert same_artist_ranker(ids, artists, train)(query, 3) == ["a2", "b2", "b1"]
+
+    def test_holdout_report_hides_test_likes_from_boost(self):
+        from recommender.application.training.evaluation import holdout_report
+
+        ids = ["a", "b", "x", "c"]
+        vectors = np.array([[1, 0, 0], [0.9, 0.1, 0], [0, 0, 1], [0, 0.1, 1]], dtype=np.float32)
+        engine = FaissRecommender(dimension=3, metric="euclidean", boost_weight=1e6)
+        engine.add_tracks(ids, vectors.copy())
+
+        report = holdout_report(
+            engine,
+            vectors,
+            {t: i for i, t in enumerate(ids)},
+            {t: "same" for t in ids},
+            train={"u": {"a"}},
+            test={"u": {"x"}},
+            k=1,
+        )
+
+        assert set(report) == {"system", "content_only", "same_artist", "popularity", "random"}
+        # x далеко от a, и буст не знает о спрятанном лайке → в топ-1 не попадает
+        assert report["system"]["track_hit@1"] == 0.0
+        assert report["system"] == report["content_only"]
+
+    def test_holdout_report_is_empty_without_test_likes(self):
+        from recommender.application.training.evaluation import holdout_report
+
+        engine = FaissRecommender(dimension=3)
+        vectors = np.eye(3, dtype=np.float32)
+        engine.add_tracks(["a", "b", "c"], vectors.copy())
+
+        report = holdout_report(
+            engine, vectors, {"a": 0, "b": 1, "c": 2}, {}, train={"u": {"a"}}, test={}
+        )
+
+        assert report == {}
+
+
+class TestGenreReport:
+    def _setup(self):
+        # Два жанра в разных углах пространства; у rock два артиста
+        points = {
+            "r1": [1, 0],
+            "r2": [1, 0.1],
+            "r3": [1, 0.2],
+            "j1": [0, 1],
+            "j2": [0.1, 1],
+            "x": [0.5, 0.5],
+        }
+        ids = list(points)
+        vectors = np.array([points[t] for t in ids], dtype=np.float32)
+        engine = FaissRecommender(dimension=2, metric="euclidean", boost_weight=0.0)
+        engine.add_tracks(ids, vectors.copy())
+        genres = {"r1": "rock", "r2": "rock", "r3": "rock", "j1": "jazz", "j2": "jazz", "x": None}
+        artists = {"r1": "A", "r2": "A", "r3": "B", "j1": "C", "j2": "D", "x": "E"}
+        return engine, vectors, {t: i for i, t in enumerate(ids)}, genres, artists
+
+    def test_same_genre_share_and_random_level(self):
+        from recommender.application.training.evaluation import genre_report
+
+        report = genre_report(*self._setup(), k=1)
+
+        assert report["all"]["tracks"] == 5  # трек без жанра не оценивается
+        assert report["all"]["system@1"] == 1.0
+        # rock: 2 других rock из 5 других треков; jazz: 1 из 5
+        assert report["rock"]["random@1"] == pytest.approx(2 / 5)
+        assert report["jazz"]["random@1"] == pytest.approx(1 / 5)
+
+    def test_artist_filter_excludes_same_artist_neighbours(self):
+        from recommender.application.training.evaluation import genre_report
+
+        report = genre_report(*self._setup(), k=1)
+
+        # r1 и r2 одного артиста: без фильтра находят друг друга, с фильтром —
+        # ближайший трек другого артиста, r3 (тот же жанр)
+        assert report["rock"]["filtered@1"] == 1.0
+        # r1: из 4 треков не артиста A rock только r3
+        engine, vectors, id_to_idx, genres, artists = self._setup()
+        artists["r3"] = "A"  # теперь у rock все треки одного артиста
+        assert (
+            genre_report(engine, vectors, id_to_idx, genres, artists, k=1)["rock"]["filtered@1"]
+            == 0.0
+        )
 
 
 class TestConfig:
@@ -325,7 +464,7 @@ class TestConfig:
         assert FaissRecommender(dimension=4, boost_weight=0.0).boost_weight == 0.0
 
     def test_eval_k_comes_from_config(self, monkeypatch):
-        from recommender.application.training.tune_recommender import evaluate
+        from recommender.application.training.evaluation import evaluate
         from recommender.config import settings
 
         monkeypatch.setattr(settings, "tuning_eval_k", 3)

@@ -4,6 +4,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 
 from recommender.infrastructure.storage.postgres import (
@@ -43,17 +44,26 @@ async def test_init_db_is_idempotent(fresh_db):
     assert {"tracks", "likes", "automl_runs", "alembic_version"} <= await _tables(fresh_db)
 
 
+def _alembic(connection, action: str, revision: str) -> None:
+    cfg = Config()
+    cfg.set_main_option("script_location", MIGRATIONS)
+    cfg.attributes["connection"] = connection
+    getattr(command, action)(cfg, revision)
+
+
 async def test_legacy_create_all_database_is_adopted(fresh_db):
-    # База, созданная до миграций: create_all без alembic_version
+    # База из времён до миграций: схема как у базовой ревизии, но без alembic_version
     async with fresh_db.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_alembic, "upgrade", BASELINE_REVISION)
+        await conn.execute(text("DROP TABLE alembic_version"))
         await conn.execute(
             text("INSERT INTO tracks (id, title, filename) VALUES ('t1', 'Old', 'old.mp3')")
         )
 
     await init_db(fresh_db)
 
-    assert await _revision(fresh_db) is not None
+    head = ScriptDirectory.from_config(_config()).get_current_head()
+    assert await _revision(fresh_db) == head
     async with fresh_db.connect() as conn:
         title = await conn.scalar(text("SELECT title FROM tracks WHERE id = 't1'"))
     assert title == "Old"
@@ -62,24 +72,20 @@ async def test_legacy_create_all_database_is_adopted(fresh_db):
 async def test_downgrade_to_base_and_back(fresh_db):
     await init_db(fresh_db)
 
-    def run(connection, action: str) -> None:
-        cfg = Config()
-        cfg.set_main_option("script_location", MIGRATIONS)
-        cfg.attributes["connection"] = connection
-        getattr(command, action)(cfg, "base" if action == "downgrade" else "head")
-
     async with fresh_db.begin() as conn:
-        await conn.run_sync(run, "downgrade")
+        await conn.run_sync(_alembic, "downgrade", "base")
     assert await _tables(fresh_db) <= {"alembic_version"}
 
     async with fresh_db.begin() as conn:
-        await conn.run_sync(run, "upgrade")
+        await conn.run_sync(_alembic, "upgrade", "head")
     assert {"tracks", "likes", "automl_runs"} <= await _tables(fresh_db)
 
 
-def test_baseline_revision_exists():
-    from alembic.script import ScriptDirectory
-
+def _config() -> Config:
     cfg = Config()
     cfg.set_main_option("script_location", MIGRATIONS)
-    assert ScriptDirectory.from_config(cfg).get_revision(BASELINE_REVISION) is not None
+    return cfg
+
+
+def test_baseline_revision_exists():
+    assert ScriptDirectory.from_config(_config()).get_revision(BASELINE_REVISION) is not None

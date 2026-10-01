@@ -33,6 +33,8 @@ tuning:
   max_boost_weight: 3.0      # вес буста ищется в [0, max]
   norm_methods: [standard, minmax, robust]
   metrics: [cosine, euclidean]
+  test_fraction: 0.2         # доля лайков каждого пользователя в отложенной выборке
+  seed: 42                   # seed разбиения и Optuna, чтобы результаты воспроизводились
 
 api:
   host: 0.0.0.0

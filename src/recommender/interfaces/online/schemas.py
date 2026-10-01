@@ -9,6 +9,7 @@ class TrackResponse(BaseModel):
     id: str
     title: str
     artist: str
+    genre: str | None = None
     duration: float | None = None
     created_at: datetime
     indexed: bool = True
@@ -18,6 +19,7 @@ class TrackResponse(BaseModel):
 class TrackUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1)
     artist: str | None = Field(default=None, min_length=1)
+    genre: str | None = Field(default=None, min_length=1)
 
 
 class TrackFeaturesResponse(BaseModel):
@@ -54,6 +56,7 @@ class AutoMLStatusResponse(BaseModel):
     status: str
     best_score: float | None = None
     best_params: dict | None = None
+    metrics: dict | None = None
     n_trials: int
     started_at: datetime | None = None
     completed_at: datetime | None = None

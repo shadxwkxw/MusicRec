@@ -6,11 +6,11 @@
 - групповые веса признаков (mfcc / chroma / contrast / ...)
 - вес коллаборативного бустинга
 
-Метрика: leave-one-out на лайках (см. evaluate) — для каждого пользователя
-прячем один лайкнутый трек и проверяем, где система ставит его в выдаче,
-построенной по остальным лайкам. Оптимизируется среднее MRR@k по двум
-прод-путям: рекомендации по треку и по пользователю (оба с бустом).
-Пространство поиска и k задаются в секции tuning конфига.
+Лайки делятся на обучающие и отложенные (tuning.test_fraction). Параметры
+подбираются по leave-one-out на обучающих лайках (среднее MRR@k по двум
+прод-путям, см. evaluation.py), а итоговая оценка вместе с бейзлайнами
+считается на отложенных — их тюнинг не видел. Пространство поиска, k и seed
+задаются в секции tuning конфига.
 
 Итог: индекс и нормализатор пересобраны с лучшими параметрами и
 сохранены на диск.
@@ -24,12 +24,19 @@ import optuna
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from recommender.application.collaborative import co_like_strength, user_co_like_strength
+from recommender.application.collaborative import load_user_likes
+from recommender.application.training.evaluation import (
+    evaluate,
+    holdout_report,
+    leave_one_out_queries,
+    objective_score,
+    split_likes,
+)
 from recommender.config import settings
 from recommender.infrastructure.data_processing.extract import bytes_to_features
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
-from recommender.infrastructure.storage.postgres import AutoMLRunORM, LikeORM, TrackORM, utcnow
+from recommender.infrastructure.storage.postgres import AutoMLRunORM, TrackORM, utcnow
 
 # Индексы групп признаков в 82-мерном векторе
 FEATURE_GROUPS = {
@@ -58,73 +65,8 @@ def apply_feature_weights(features: np.ndarray, weights: dict[str, float]) -> np
     return features * feature_weight_vector(weights)
 
 
-def _rank(recs: list, track_id: str) -> int | None:
-    """1-based позиция трека в выдаче или None."""
-    for pos, rec in enumerate(recs, start=1):
-        if rec.track_id == track_id:
-            return pos
-    return None
-
-
-def evaluate(
-    engine: FaissRecommender,
-    normalized: np.ndarray,
-    id_to_idx: dict[str, int],
-    user_likes: dict[str, set[str]],
-    k: int | None = None,
-) -> dict[str, float]:
-    """Leave-one-out по лайкам для обоих прод-путей рекомендаций.
-
-    track: запрос от каждого другого лайка пользователя, с co-like бустом;
-           спрятанный лайк убран и из буста, иначе он подсказывает ответ.
-    user:  запрос — среднее остальных лайков, они же исключены, с co-like
-           бустом от них; спрятанный лайк так же убран из буста.
-    Для каждого пути считаются hit@k и MRR@k.
-    """
-    k = k or settings.tuning_eval_k
-    ranks: dict[str, list[int | None]] = {"track": [], "user": []}
-    for uid, liked in user_likes.items():
-        if len(liked) < 2 or any(t not in id_to_idx for t in liked):
-            continue
-        for held_out in sorted(liked):
-            others = sorted(liked - {held_out})
-            visible = {u: (t - {held_out} if u == uid else t) for u, t in user_likes.items()}
-
-            for query_id in others:
-                recs = engine.recommend(
-                    normalized[id_to_idx[query_id]],
-                    limit=k,
-                    exclude_ids={query_id},
-                    like_boost=co_like_strength(query_id, visible) or None,
-                )
-                ranks["track"].append(_rank(recs, held_out))
-
-            query = normalized[[id_to_idx[t] for t in others]].mean(axis=0)
-            recs = engine.recommend(
-                query,
-                limit=k,
-                exclude_ids=set(others),
-                like_boost=user_co_like_strength(set(others), visible) or None,
-            )
-            ranks["user"].append(_rank(recs, held_out))
-
-    metrics: dict[str, float] = {}
-    for path, path_ranks in ranks.items():
-        n = len(path_ranks) or 1
-        metrics[f"{path}_hit@{k}"] = sum(r is not None for r in path_ranks) / n
-        metrics[f"{path}_mrr@{k}"] = sum(1 / r for r in path_ranks if r is not None) / n
-    return metrics
-
-
-def objective_score(metrics: dict[str, float]) -> float:
-    """Среднее MRR@k по двум путям."""
-    mrr = [v for name, v in metrics.items() if "_mrr@" in name]
-    return sum(mrr) / len(mrr)
-
-
 async def run_tuning(db: AsyncSession, run_id: int) -> dict:
-    """Запустить Optuna-оптимизацию. Возвращает best params и score."""
-    # Все треки с фичами
+    """Подобрать параметры на обучающих лайках, оценить на отложенных, пересобрать индекс."""
     result = await db.execute(select(TrackORM).where(TrackORM.feature_vector.isnot(None)))
     tracks: Sequence[TrackORM] = result.scalars().all()
 
@@ -135,24 +77,13 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     raw_features = np.array([bytes_to_features(t.feature_vector) for t in tracks])
     id_to_idx = {tid: i for i, tid in enumerate(track_ids)}
 
-    # Лайки для evaluation
-    result = await db.execute(select(LikeORM))
-    likes: Sequence[LikeORM] = result.scalars().all()
-
-    user_tracks: dict[str, list[str]] = {}
-    for like in likes:
-        user_tracks.setdefault(like.user_id, []).append(like.track_id)
-    user_likes = {uid: set(tids) for uid, tids in user_tracks.items()}
-
-    # Только пользователи с >=2 лайками (для leave-one-out)
-    eval_users = {
-        uid: tids
-        for uid, tids in user_tracks.items()
-        if len(tids) >= 2 and all(t in id_to_idx for t in tids)
-    }
-
-    if not eval_users:
-        raise ValueError("Need users with >=2 liked tracks for evaluation")
+    train, test = split_likes(
+        await load_user_likes(db), settings.tuning_test_fraction, settings.tuning_seed
+    )
+    if not leave_one_out_queries(train, set(track_ids)):
+        raise ValueError(
+            "Need users with >=2 liked tracks for evaluation (after holding out test likes)"
+        )
 
     run = await db.get(AutoMLRunORM, run_id)
     if run is None:
@@ -161,64 +92,90 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     run.started_at = utcnow()
     await db.commit()
 
-    def objective(trial: optuna.Trial) -> float:
-        norm_method = trial.suggest_categorical("norm_method", settings.tuning_norm_methods)
-        metric = trial.suggest_categorical("metric", settings.tuning_metrics)
-        boost_weight = trial.suggest_float("boost_weight", 0.0, settings.tuning_max_boost_weight)
-
-        weights = {
-            group_name: trial.suggest_float(
-                f"w_{group_name}", 0.0, settings.tuning_max_feature_weight
-            )
-            for group_name in FEATURE_GROUPS
-        }
-
-        normalizer = FeatureNormalizer(method=norm_method, weights=feature_weight_vector(weights))
+    def build(params: dict) -> tuple[FeatureNormalizer, np.ndarray, FaissRecommender]:
+        weights = {g: params[f"w_{g}"] for g in FEATURE_GROUPS}
+        normalizer = FeatureNormalizer(
+            method=params["norm_method"], weights=feature_weight_vector(weights)
+        )
         normalized = normalizer.fit_transform(raw_features)
-
         engine = FaissRecommender(
-            dimension=normalized.shape[1], metric=metric, boost_weight=boost_weight
+            dimension=normalized.shape[1],
+            metric=params["metric"],
+            boost_weight=params["boost_weight"],
         )
         engine.add_tracks(track_ids, normalized.copy())
+        return normalizer, normalized, engine
 
-        metrics = evaluate(engine, normalized, id_to_idx, user_likes)
+    def objective(trial: optuna.Trial) -> float:
+        params = {
+            "norm_method": trial.suggest_categorical("norm_method", settings.tuning_norm_methods),
+            "metric": trial.suggest_categorical("metric", settings.tuning_metrics),
+            "boost_weight": trial.suggest_float(
+                "boost_weight", 0.0, settings.tuning_max_boost_weight
+            ),
+        }
+        for group_name in FEATURE_GROUPS:
+            params[f"w_{group_name}"] = trial.suggest_float(
+                f"w_{group_name}", 0.0, settings.tuning_max_feature_weight
+            )
+        _, normalized, engine = build(params)
+        metrics = evaluate(engine, normalized, id_to_idx, train)
         trial.set_user_attr("metrics", metrics)
         return objective_score(metrics)
 
-    study = optuna.create_study(direction="maximize")
-    study.optimize(
-        objective,
-        n_trials=settings.automl_n_trials,
-        timeout=settings.automl_timeout,
+    study = optuna.create_study(
+        direction="maximize", sampler=optuna.samplers.TPESampler(seed=settings.tuning_seed)
     )
+    study.optimize(objective, n_trials=settings.automl_n_trials, timeout=settings.automl_timeout)
 
     best = study.best_params
+    normalizer, normalized, engine = build(best)
+    artists = {t.id: t.artist or "" for t in tracks}
+    holdout = holdout_report(engine, normalized, id_to_idx, artists, train, test)
+    metrics = {
+        "train": study.best_trial.user_attrs["metrics"],
+        "holdout": holdout,
+        "test_likes": sum(len(t) for t in test.values()),
+    }
+
     run.status = "completed"
     run.best_score = study.best_value
     run.best_params = json.dumps(best)
+    run.metrics = json.dumps(metrics)
     run.n_trials = len(study.trials)
     run.completed_at = utcnow()
     await db.commit()
 
-    # Пересобрать индекс с лучшими параметрами
-    weights = {g: best.get(f"w_{g}", 1.0) for g in FEATURE_GROUPS}
-    normalizer = FeatureNormalizer(
-        method=best["norm_method"], weights=feature_weight_vector(weights)
-    )
-    normalized = normalizer.fit_transform(raw_features)
     normalizer.save()
-
-    engine = FaissRecommender(
-        dimension=normalized.shape[1],
-        metric=best["metric"],
-        boost_weight=best["boost_weight"],
-    )
-    engine.add_tracks(track_ids, normalized.copy())
     engine.save()
 
     return {
         "best_score": study.best_value,
         "best_params": best,
         "n_trials": len(study.trials),
-        "metrics": study.best_trial.user_attrs["metrics"],
+        **metrics,
     }
+
+
+async def create_tuning_run(db: AsyncSession) -> int:
+    """Зарегистрировать запуск тюнинга (status=pending), вернуть его id."""
+    run = AutoMLRunORM(status="pending")
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    return run.id
+
+
+async def execute_tuning_run(db: AsyncSession, run_id: int) -> dict:
+    """Выполнить запуск. При ошибке помечает его failed с текстом ошибки и пробрасывает её."""
+    try:
+        return await run_tuning(db, run_id)
+    except Exception as e:
+        await db.rollback()
+        run = await db.get(AutoMLRunORM, run_id)
+        if run is not None:
+            run.status = "failed"
+            run.best_params = json.dumps({"error": str(e)})
+            run.completed_at = utcnow()
+            await db.commit()
+        raise

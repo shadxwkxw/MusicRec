@@ -1,6 +1,7 @@
 """REST-роуты online-сервиса. Тонкий слой поверх application use cases."""
 
 import json
+import logging
 import shutil
 import uuid
 from collections.abc import Sequence
@@ -27,7 +28,10 @@ from recommender.application.recommend import (
     recommend_by_track,
     recommend_for_user,
 )
-from recommender.application.training.tune_recommender import run_tuning
+from recommender.application.training.tune_recommender import (
+    create_tuning_run,
+    execute_tuning_run,
+)
 from recommender.config import settings
 from recommender.infrastructure.data_processing.extract import (
     extract_features,
@@ -41,7 +45,6 @@ from recommender.infrastructure.storage.postgres import (
     TrackORM,
     async_session,
     get_db,
-    utcnow,
 )
 from recommender.interfaces.online.schemas import (
     AutoMLStatusResponse,
@@ -54,6 +57,7 @@ from recommender.interfaces.online.schemas import (
     TrackUpdate,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -76,6 +80,7 @@ async def upload_track(
     file: UploadFile = File(...),
     title: str = Form(...),
     artist: str = Form(default="Unknown"),
+    genre: str | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     """Загрузить аудио, извлечь фичи, добавить в индекс."""
@@ -98,6 +103,7 @@ async def upload_track(
         id=track_id,
         title=title,
         artist=artist,
+        genre=genre,
         filename=filename,
         duration=duration,
         feature_vector=features_to_bytes(features),
@@ -121,6 +127,7 @@ async def upload_track(
         id=track_id,
         title=title,
         artist=artist,
+        genre=genre,
         duration=duration,
         created_at=track.created_at,
         indexed=indexed,
@@ -132,6 +139,7 @@ def _to_response(track: TrackORM, indexed_ids: set[str]) -> TrackResponse:
         id=track.id,
         title=track.title,
         artist=track.artist,
+        genre=track.genre,
         duration=track.duration,
         created_at=track.created_at,
         indexed=track.id in indexed_ids,
@@ -311,30 +319,22 @@ async def start_tuning(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Запустить оптимизацию в фоне."""
-    run = AutoMLRunORM(status="pending")
-    db.add(run)
-    await db.commit()
-    await db.refresh(run)
-
+    """Запустить оптимизацию в фоне; по завершении сервис переключается на новый индекс."""
+    run_id = await create_tuning_run(db)
     app_state = request.app.state
 
-    async def _train(run_id: int):
+    async def _train() -> None:
         async with async_session() as session:
             try:
-                await run_tuning(session, run_id)
-                # Перезагрузить движок/нормализатор с новыми артефактами
-                app_state.engine = FaissRecommender.load()
-                app_state.normalizer = FeatureNormalizer.load()
-            except Exception as e:
-                r = await session.get(AutoMLRunORM, run_id)
-                r.status = "failed"
-                r.best_params = json.dumps({"error": str(e)})
-                r.completed_at = utcnow()
-                await session.commit()
+                await execute_tuning_run(session, run_id)
+            except Exception:
+                logger.exception("Tuning run %s failed", run_id)  # статус failed уже записан
+                return
+        app_state.engine = FaissRecommender.load()
+        app_state.normalizer = FeatureNormalizer.load()
 
-    background_tasks.add_task(_train, run.id)
-    return {"run_id": run.id, "status": "started"}
+    background_tasks.add_task(_train)
+    return {"run_id": run_id, "status": "started"}
 
 
 @router.get("/automl/status", response_model=list[AutoMLStatusResponse])
@@ -347,6 +347,7 @@ async def get_tuning_status(db: AsyncSession = Depends(get_db)):
             status=r.status,
             best_score=r.best_score,
             best_params=json.loads(r.best_params) if r.best_params else None,
+            metrics=json.loads(r.metrics) if r.metrics else None,
             n_trials=r.n_trials,
             started_at=r.started_at,
             completed_at=r.completed_at,
@@ -374,3 +375,17 @@ async def rebuild_index_endpoint(request: Request, db: AsyncSession = Depends(ge
         "tracks_indexed": result.tracks_indexed,
         "feature_dim": result.feature_dim,
     }
+
+
+@router.post("/index/reload")
+async def reload_index(request: Request):
+    """Подхватить индекс и нормализатор с диска, например после batch rebuild / tune."""
+    try:
+        engine = FaissRecommender.load()
+        normalizer = FeatureNormalizer.load()
+    except FileNotFoundError as e:
+        raise HTTPException(409, "No saved index yet, run /index/rebuild first") from e
+
+    request.app.state.engine = engine
+    request.app.state.normalizer = normalizer
+    return {"status": "ok", "tracks_indexed": engine.index.ntotal, "metric": engine.metric}

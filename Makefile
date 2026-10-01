@@ -1,9 +1,9 @@
 .PHONY: install lock upgrade run test test-unit test-integration coverage smoke audit build \
         lint format typecheck clean \
         docker-build docker-up docker-down docker-logs \
-        batch-extract batch-recommend \
-        docker-batch-extract docker-batch-recommend \
-        migrate migration db-copy
+        batch-extract batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
+        docker-batch-extract docker-batch-rebuild docker-batch-tune docker-batch-recommend \
+        migrate migration db-copy fma-unpack fma-import
 
 VENV := .venv
 PY   := $(VENV)/bin/python
@@ -87,12 +87,41 @@ typecheck:
 INPUT_DIR ?= data/audio
 OUTPUT    ?= artifacts/recs.parquet
 TOP_N     ?= 10
+API_URL   ?= http://localhost:8000
 
 batch-extract:
 	$(PY) services/batch/main.py extract --input-dir $(INPUT_DIR)
 
+# Индекс пишется на диск; запущенный сервис подхватит его после make index-reload
+batch-rebuild:
+	$(PY) services/batch/main.py rebuild
+
+batch-tune:
+	$(PY) services/batch/main.py tune
+
+# Текущий индекс на отложенных лайках против бейзлайнов
+batch-evaluate:
+	$(PY) services/batch/main.py evaluate
+
+index-reload:
+	curl -fsS -X POST $(API_URL)/index/reload
+
 batch-recommend:
 	$(PY) services/batch/main.py recommend --output $(OUTPUT) --top-n $(TOP_N)
+
+# ── Free Music Archive ───────────────────────────────────────────
+# Архивы: https://github.com/mdeff/fma (fma_metadata.zip, fma_small.zip) в $(FMA_ROOT)
+FMA_ROOT   ?= data/fma
+FMA_SUBSET ?= small
+WORKERS    ?= 4
+
+fma-unpack:
+	# архивы сжаты bzip2, который не умеет unzip на macOS; zipfile из Python умеет
+	cd $(FMA_ROOT) && $(abspath $(PY)) -m zipfile -e fma_metadata.zip . \
+		&& $(abspath $(PY)) -m zipfile -e fma_$(FMA_SUBSET).zip .
+
+fma-import:
+	$(PY) services/batch/main.py import-fma --root $(FMA_ROOT) --subset $(FMA_SUBSET) --workers $(WORKERS)
 
 # ── Docker ───────────────────────────────────────────────────────
 docker-build:
@@ -110,6 +139,12 @@ docker-logs:
 docker-batch-extract:
 	docker compose --profile batch run --rm recommender-batch \
 		extract --input-dir /app/$(INPUT_DIR)
+
+docker-batch-rebuild:
+	docker compose --profile batch run --rm recommender-batch rebuild
+
+docker-batch-tune:
+	docker compose --profile batch run --rm recommender-batch tune
 
 docker-batch-recommend:
 	docker compose --profile batch run --rm recommender-batch \

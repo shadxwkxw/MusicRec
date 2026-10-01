@@ -62,17 +62,17 @@ class FaissRecommender(Recommender):
         if self.metric == "cosine":
             faiss.normalize_L2(query)
 
-        # Берём с запасом, чтобы хватило после фильтрации.
-        # При наличии like_boost сканируем весь индекс — иначе сильный буст
-        # не сможет поднять трек, который не попал в топ-K поиска.
+        # Берём с запасом: исключённые треки (сам запрос, лайки) тоже могут
+        # оказаться ближайшими. При like_boost сканируем весь индекс — иначе
+        # сильный буст не поднимет трек, который не попал в топ-K поиска.
+        exclude_ids = exclude_ids or set()
         search_k = (
             self.index.ntotal
             if like_boost
-            else min(limit * settings.candidate_multiplier, self.index.ntotal)
+            else min(limit * settings.candidate_multiplier + len(exclude_ids), self.index.ntotal)
         )
         distances, indices = self.index.search(query, search_k)
 
-        exclude_ids = exclude_ids or set()
         results: list[Recommendation] = []
 
         for dist, idx in zip(distances[0], indices[0], strict=True):

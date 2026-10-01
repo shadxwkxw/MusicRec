@@ -44,6 +44,7 @@ class TrackORM(Base):
     id = Column(String, primary_key=True)
     title = Column(String, nullable=False)
     artist = Column(String, default="Unknown")
+    genre = Column(String, nullable=True)
     filename = Column(String, nullable=False)
     duration = Column(Float, nullable=True)
     feature_vector = Column(LargeBinary, nullable=True)  # numpy bytes
@@ -70,6 +71,7 @@ class AutoMLRunORM(Base):
     status = Column(String, default="pending")  # pending | running | completed | failed
     best_score = Column(Float, nullable=True)
     best_params = Column(String, nullable=True)  # JSON-string
+    metrics = Column(String, nullable=True)  # JSON: train / holdout + бейзлайны
     n_trials = Column(Integer, default=0)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
