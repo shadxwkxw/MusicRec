@@ -1,4 +1,4 @@
-.PHONY: install lock upgrade run test test-unit test-integration coverage smoke audit build \
+.PHONY: install install-embeddings lock upgrade run test test-unit test-integration coverage smoke audit build \
         lint format typecheck clean \
         docker-build docker-up docker-down docker-logs \
         batch-extract batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
@@ -14,6 +14,10 @@ export UV_PROJECT_ENVIRONMENT := $(abspath $(VENV))
 # Точные версии из uv.lock; падает, если lock не соответствует pyproject.toml
 install:
 	uv sync --locked --extra dev
+
+# То же плюс torch и transformers для предобученных аудиоэмбеддингов
+install-embeddings:
+	uv sync --locked --extra dev --extra embeddings
 
 # Обновить uv.lock после правки зависимостей в pyproject.toml
 lock:

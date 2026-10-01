@@ -40,6 +40,10 @@ dev = [
     "mypy>=1.10",
     "types-PyYAML>=6.0",
 ]
+embeddings = [
+    "torch>=2.2",
+    "transformers>=4.40",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -88,4 +92,11 @@ show_error_codes = true
 # librosa>=1.0 использует синтаксис Python 3.12 (`type X = ...`), который mypy
 # не разбирает при python_version = "3.11"; типов у неё всё равно нет.
 module = ["librosa", "librosa.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+# Опциональные зависимости (make install-embeddings): в CI не ставятся, а их
+# собственные аннотации местами неверны (декоратор на nn.Module.to) —
+# проверяем одинаково с ними и без них.
+module = ["torch", "torch.*", "transformers", "transformers.*"]
 follow_imports = "skip"
