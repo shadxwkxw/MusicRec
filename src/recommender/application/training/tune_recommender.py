@@ -66,11 +66,6 @@ def feature_weight_vector(weights: dict[str, float]) -> np.ndarray:
     return vec
 
 
-def apply_feature_weights(features: np.ndarray, weights: dict[str, float]) -> np.ndarray:
-    """Применить групповые веса к матрице признаков."""
-    return features * feature_weight_vector(weights)
-
-
 def _objective_mode(genres: dict[str, str]) -> str:
     if settings.tuning_objective != "auto":
         return settings.tuning_objective

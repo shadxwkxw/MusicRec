@@ -523,27 +523,26 @@ class TestConfig:
 
 
 class TestFeatureGroups:
-    def test_apply_weights(self):
+    def test_groups_cover_the_whole_feature_vector(self):
+        from recommender.application.training.tune_recommender import FEATURE_GROUPS
+        from recommender.config import settings
+
+        bounds = sorted(FEATURE_GROUPS.values())
+        assert bounds[0][0] == 0 and bounds[-1][1] == settings.feature_dim
+        assert all(prev[1] == nxt[0] for prev, nxt in zip(bounds, bounds[1:], strict=False))
+
+    def test_weight_vector_expands_group_weights(self):
         from recommender.application.training.tune_recommender import (
             FEATURE_GROUPS,
-            apply_feature_weights,
+            feature_weight_vector,
         )
 
-        features = np.ones((5, 82), dtype=np.float32)
-        weights = {name: 2.0 for name in FEATURE_GROUPS}
-        weighted = apply_feature_weights(features, weights)
-        np.testing.assert_allclose(weighted, 2.0)
-
-    def test_zero_weight_kills_group(self):
-        from recommender.application.training.tune_recommender import (
-            FEATURE_GROUPS,
-            apply_feature_weights,
-        )
-
-        features = np.ones((5, 82), dtype=np.float32)
         weights = {name: 1.0 for name in FEATURE_GROUPS}
         weights["mfcc"] = 0.0
-        weighted = apply_feature_weights(features, weights)
+        weights["tempo"] = 2.5
 
-        np.testing.assert_allclose(weighted[:, 0:26], 0.0)
-        np.testing.assert_allclose(weighted[:, 26:], 1.0)
+        vector = feature_weight_vector(weights)
+
+        np.testing.assert_allclose(vector[0:26], 0.0)
+        np.testing.assert_allclose(vector[76:77], 2.5)
+        np.testing.assert_allclose(np.delete(vector, [*range(26), 76]), 1.0)
