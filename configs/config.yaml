@@ -17,6 +17,17 @@ audio:
   n_chroma: 12
   n_contrast_bands: 6    # librosa требует fmin*2^n_bands < sr/2; при sr=22050 максимум 6
 
+features:
+  # Чем описываются треки для поиска похожих: librosa — 82 признака из аудио,
+  # embedding — эмбеддинги предобученной модели (считает `batch embed`,
+  # нужен make install-embeddings). После смены источника — rebuild.
+  source: ${FEATURE_SOURCE:-librosa}
+  embedding_model: laion/clap-htsat-unfused
+  embedding_window_seconds: 10.0   # модель видит не больше 10 с — трек режется на окна
+  embedding_max_windows: 6         # окон на трек, равномерно по первым duration_limit секундам
+  embedding_batch_tracks: 32
+  embedding_loaders: 8             # потоков декодирования аудио
+
 recommendation:
   default_limit: 10          # сколько рекомендаций по умолчанию (API и batch --top-n)
   candidate_multiplier: 3    # FAISS ищет limit * N кандидатов, чтобы хватило после фильтрации

@@ -546,3 +546,79 @@ class TestFeatureGroups:
         np.testing.assert_allclose(vector[0:26], 0.0)
         np.testing.assert_allclose(vector[76:77], 2.5)
         np.testing.assert_allclose(np.delete(vector, [*range(26), 76]), 1.0)
+
+
+class TestEmbeddingWindows:
+    def test_short_track_is_one_window(self):
+        from recommender.infrastructure.data_processing.embeddings import split_windows
+
+        windows = split_windows(np.arange(5), window=10, max_windows=6)
+
+        assert [len(w) for w in windows] == [5]
+
+    def test_long_track_is_cut_into_full_windows_with_tail(self):
+        from recommender.infrastructure.data_processing.embeddings import (
+            SAMPLE_RATE,
+            split_windows,
+        )
+
+        window = 10 * SAMPLE_RATE
+        y = np.arange(window * 3 + 5 * SAMPLE_RATE)  # 35 с: хвост 5 с длиннее порога 3 с
+
+        windows = split_windows(y, window, max_windows=6)
+
+        assert len(windows) == 4 and all(len(w) == window for w in windows)
+        assert windows[-1][-1] == y[-1]  # последнее окно прижато к концу трека
+
+    def test_short_tail_is_dropped_and_windows_are_spread_evenly(self):
+        from recommender.infrastructure.data_processing.embeddings import (
+            SAMPLE_RATE,
+            split_windows,
+        )
+
+        window = 10 * SAMPLE_RATE
+        y = np.arange(window * 12 + SAMPLE_RATE)  # 121 с: хвост 1 с отбрасывается
+
+        windows = split_windows(y, window, max_windows=3)
+
+        assert [int(w[0]) for w in windows] == [0, window * 6, window * 11]
+
+
+class TestEnvFile:
+    @pytest.fixture
+    def env_file(self, tmp_path, monkeypatch):
+        path = tmp_path / "custom.env"
+        path.write_text("RECOMMENDER_TEST_A=from-file\nRECOMMENDER_TEST_B=from-file\n")
+        # регистрируем ключи, чтобы monkeypatch вернул окружение после теста
+        monkeypatch.delenv("RECOMMENDER_TEST_A", raising=False)
+        monkeypatch.delenv("RECOMMENDER_TEST_B", raising=False)
+        return path
+
+    def test_file_values_load_but_environment_wins(self, env_file, monkeypatch):
+        import os
+
+        from recommender.config import load_env_file
+
+        monkeypatch.setenv("ENV_FILE", str(env_file))
+        monkeypatch.setenv("RECOMMENDER_TEST_B", "from-env")
+
+        assert load_env_file() == env_file
+        assert os.environ["RECOMMENDER_TEST_A"] == "from-file"
+        assert os.environ["RECOMMENDER_TEST_B"] == "from-env"
+
+    def test_empty_env_file_disables_loading(self, env_file, monkeypatch):
+        import os
+
+        from recommender.config import load_env_file
+
+        monkeypatch.setenv("ENV_FILE", "")
+
+        assert load_env_file() is None
+        assert "RECOMMENDER_TEST_A" not in os.environ
+
+    def test_missing_file_is_ignored(self, tmp_path, monkeypatch):
+        from recommender.config import load_env_file
+
+        monkeypatch.setenv("ENV_FILE", str(tmp_path / "nope.env"))
+
+        assert load_env_file() is None

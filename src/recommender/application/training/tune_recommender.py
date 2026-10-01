@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from recommender.application.collaborative import load_user_likes
+from recommender.application.features import load_vectors, uses_embeddings
 from recommender.application.training.evaluation import (
     evaluate,
     genre_report,
@@ -39,7 +40,6 @@ from recommender.application.training.evaluation import (
     split_likes,
 )
 from recommender.config import settings
-from recommender.infrastructure.data_processing.extract import bytes_to_features
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import AutoMLRunORM, TrackORM, utcnow
@@ -75,14 +75,19 @@ def _objective_mode(genres: dict[str, str]) -> str:
 
 async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     """Подобрать параметры, оценить на отложенных данных, пересобрать индекс."""
-    result = await db.execute(select(TrackORM).where(TrackORM.feature_vector.isnot(None)))
-    tracks: Sequence[TrackORM] = result.scalars().all()
+    vectors = await load_vectors(db)
+    rows: Sequence[TrackORM] = (await db.execute(select(TrackORM))).scalars().all()
+    tracks = [t for t in rows if t.id in vectors]
 
     if len(tracks) < 5:
-        raise ValueError("Need at least 5 tracks with features to run tuning")
+        raise ValueError(
+            f"Need at least 5 tracks with {settings.feature_source} features to run tuning"
+        )
 
     track_ids = [t.id for t in tracks]
-    raw_features = np.array([bytes_to_features(t.feature_vector) for t in tracks])
+    raw_features = np.stack([vectors[t] for t in track_ids])
+    # Групповые веса имеют смысл только для librosa-признаков
+    groups = {} if uses_embeddings() else FEATURE_GROUPS
     id_to_idx = {tid: i for i, tid in enumerate(track_ids)}
     artists = {t.id: t.artist or "" for t in tracks}
     genres = {t.id: t.genre for t in tracks if t.genre}
@@ -113,9 +118,10 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     def build(
         params: dict, only: list[str] | None = None
     ) -> tuple[FeatureNormalizer, np.ndarray, FaissRecommender]:
-        weights = {g: params[f"w_{g}"] for g in FEATURE_GROUPS}
+        weights = {g: params[f"w_{g}"] for g in groups}
         normalizer = FeatureNormalizer(
-            method=params["norm_method"], weights=feature_weight_vector(weights)
+            method=params["norm_method"],
+            weights=feature_weight_vector(weights) if groups else None,
         )
         normalized = normalizer.fit_transform(raw_features)
         engine = FaissRecommender(
@@ -132,7 +138,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
             "norm_method": trial.suggest_categorical("norm_method", settings.tuning_norm_methods),
             "metric": trial.suggest_categorical("metric", settings.tuning_metrics),
         }
-        for group_name in FEATURE_GROUPS:
+        for group_name in groups:
             params[f"w_{group_name}"] = trial.suggest_float(
                 f"w_{group_name}", 0.0, settings.tuning_max_feature_weight
             )

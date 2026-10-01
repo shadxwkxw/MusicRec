@@ -21,8 +21,14 @@ from fastapi import (
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from recommender.application.features import (
+    IndexSourceMismatchError,
+    check_index_source,
+    uses_embeddings,
+)
 from recommender.application.index.build_index import NoTracksError, rebuild_index
 from recommender.application.recommend import (
+    FeaturesNotReadyError,
     NoLikedTracksError,
     TrackNotFoundError,
     recommend_by_track,
@@ -42,6 +48,7 @@ from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import (
     AutoMLRunORM,
     LikeORM,
+    TrackEmbeddingORM,
     TrackORM,
     async_session,
     get_db,
@@ -105,19 +112,19 @@ async def upload_track(
         artist=artist,
         genre=genre,
         filename=filename,
+        audio_path=str(filepath),
         duration=duration,
         feature_vector=features_to_bytes(features),
     )
     db.add(track)
     await db.commit()
 
-    # Инкрементальное добавление в индекс возможно только если нормализатор
-    # уже обучен — иначе сырые фичи смешаются с нормализованными и испортят
-    # косинусное сходство. До первого /index/rebuild трек живёт в БД и
-    # станет searchable после ребилда.
+    # Сразу в индекс — только если индекс на librosa-признаках и нормализатор
+    # уже обучен (иначе сырые признаки смешаются с нормализованными). В режиме
+    # embedding эмбеддинг досчитает batch embed, трек появится после rebuild.
     engine = _engine(request)
     normalizer = _normalizer(request)
-    indexed = normalizer.is_fitted
+    indexed = normalizer.is_fitted and not uses_embeddings()
     if indexed:
         norm_features = normalizer.transform(features)
         engine.add_tracks([track_id], norm_features)
@@ -182,13 +189,15 @@ async def update_track(
 
 @router.delete("/tracks/{track_id}", status_code=204)
 async def delete_track(request: Request, track_id: str, db: AsyncSession = Depends(get_db)):
-    """Удалить трек вместе с его лайками, аудиофайлом и записью в индексе."""
+    """Удалить трек вместе с лайками, эмбеддингами, аудиофайлом и записью в индексе."""
     track = await db.get(TrackORM, track_id)
     if not track:
         raise HTTPException(404, "Track not found")
 
+    # Удаляем только собственную копию из папки загрузок, не файлы датасетов
     filepath = settings.audio_dir / track.filename
     await db.execute(delete(LikeORM).where(LikeORM.track_id == track_id))
+    await db.execute(delete(TrackEmbeddingORM).where(TrackEmbeddingORM.track_id == track_id))
     await db.delete(track)
     await db.commit()
     filepath.unlink(missing_ok=True)
@@ -256,6 +265,10 @@ async def get_recommendations(
         )
     except TrackNotFoundError:
         raise HTTPException(404, "Track not found") from None
+    except FeaturesNotReadyError:
+        raise HTTPException(
+            409, f"Track has no {settings.feature_source} features yet (run batch embed)"
+        ) from None
 
     return RecommendationResponse(
         source_track_id=track_id,
@@ -385,6 +398,10 @@ async def reload_index(request: Request):
         normalizer = FeatureNormalizer.load()
     except FileNotFoundError as e:
         raise HTTPException(409, "No saved index yet, run /index/rebuild first") from e
+    try:
+        check_index_source(engine)
+    except IndexSourceMismatchError as e:
+        raise HTTPException(409, str(e)) from e
 
     request.app.state.engine = engine
     request.app.state.normalizer = normalizer

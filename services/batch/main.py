@@ -3,6 +3,7 @@
 Subcommands:
     extract    — извлечь фичи из директории аудио и записать в БД
     import-fma — импортировать подмножество Free Music Archive с жанрами
+    embed      — досчитать эмбеддинги модели features.embedding_model
     rebuild    — пересобрать индекс из всех треков БД (параметры тюнинга сохраняются)
     tune       — подобрать параметры Optuna по лайкам и пересобрать индекс
     evaluate   — оценить текущий индекс на отложенных лайках против бейзлайнов
@@ -24,6 +25,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
+from recommender.application.batch_embed import run_batch_embed
 from recommender.application.batch_extract import (
     BatchExtractResult,
     run_batch_extract,
@@ -77,9 +79,41 @@ def _print_import_stats(title: str, stats: BatchExtractResult) -> None:
     print(
         f"{title} done: processed={stats.processed}, "
         f"skipped={stats.skipped}, failed={len(stats.failed)}"
+        + (f", audio paths filled={stats.paths_filled}" if stats.paths_filled else "")
     )
     for name, err in stats.failed:
         print(f"  FAIL {name}: {err}")
+
+
+async def _embed(args: argparse.Namespace) -> None:
+    try:
+        from recommender.infrastructure.data_processing.embeddings import ClapEmbedder
+
+        embedder = ClapEmbedder(
+            model_name=settings.embedding_model,
+            window_seconds=settings.embedding_window_seconds,
+            max_windows=settings.embedding_max_windows,
+            duration_limit=settings.duration_limit,
+            batch_tracks=settings.embedding_batch_tracks,
+            loaders=settings.embedding_loaders,
+        )
+    except ImportError as e:
+        raise SystemExit(
+            f"Embeddings need torch and transformers: make install-embeddings ({e})"
+        ) from e
+    print(f"Embedding with {embedder.model_name} on {embedder.device}")
+
+    def progress(done: int, total: int) -> None:
+        if done % 500 == 0 or done == total:
+            print(f"  {done}/{total}", flush=True)
+
+    await init_db()
+    async with async_session() as session:
+        stats = await run_batch_embed(session, embedder, progress=progress)
+    _print_import_stats("Embed", stats)
+    if settings.feature_source != "embedding":
+        print("features.source is librosa: set FEATURE_SOURCE=embedding to use them")
+    print("Run `rebuild` (and `index-reload` for a running server) to make them searchable")
 
 
 async def _rebuild(args: argparse.Namespace) -> None:
@@ -109,10 +143,10 @@ async def _tune(args: argparse.Namespace) -> None:
         f"best_score={result['best_score']:.3f} (train: {train})"
     )
     params = result["best_params"]
+    weights = ", ".join(f"{k[2:]}={v:.2f}" for k, v in params.items() if k.startswith("w_"))
     print(
         f"  params: {params['metric']}, {params['norm_method']}, "
-        f"boost={params['boost_weight']:.2f}, "
-        + ", ".join(f"{k[2:]}={v:.2f}" for k, v in params.items() if k.startswith("w_"))
+        f"boost={params['boost_weight']:.2f}" + (f", {weights}" if weights else "")
     )
     _print_report(result["holdout"], result["test_likes"])
     _print_table("Same-genre share on held-out artists", result["genre_test"], "no genre labels")
@@ -176,6 +210,9 @@ def main() -> None:
     p_fma.add_argument("--workers", type=int, default=1, help="Parallel extraction processes")
     p_fma.add_argument("--limit", type=int, default=0, help="Import only the first N tracks")
     p_fma.set_defaults(func=_import_fma)
+
+    p_embed = sub.add_parser("embed", help="Compute missing embeddings (features.embedding_model)")
+    p_embed.set_defaults(func=_embed)
 
     p_rebuild = sub.add_parser("rebuild", help="Rebuild the index from all tracks in the DB")
     p_rebuild.set_defaults(func=_rebuild)

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import librosa
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from recommender.infrastructure.data_processing.extract import (
@@ -38,6 +38,7 @@ class ImportItem:
 class BatchExtractResult:
     processed: int = 0
     skipped: int = 0
+    paths_filled: int = 0  # уже импортированным трекам дописан путь к аудио
     failed: list[tuple[str, str]] = field(default_factory=list)  # (filename, error)
 
 
@@ -66,9 +67,23 @@ async def run_batch_import(
     progress: Callable[[int, int], None] | None = None,
 ) -> BatchExtractResult:
     """Извлечь признаки и сохранить треки, которых ещё нет в БД."""
-    existing: set[str] = set((await db.execute(select(TrackORM.filename))).scalars().all())
+    rows = (await db.execute(select(TrackORM.filename, TrackORM.audio_path))).all()
+    existing: dict[str, str | None] = {filename: path for filename, path in rows}
     todo = [item for item in items if item.filename not in existing]
     stats = BatchExtractResult(skipped=len(items) - len(todo))
+
+    # Треки, импортированные до появления audio_path: путь дописываем без
+    # повторного извлечения признаков — он нужен для batch embed
+    for item in items:
+        if item.filename in existing and not existing[item.filename]:
+            await db.execute(
+                update(TrackORM)
+                .where(TrackORM.filename == item.filename)
+                .values(audio_path=str(item.path))
+            )
+            stats.paths_filled += 1
+    if stats.paths_filled:
+        await db.commit()
 
     pending = 0
     for done, (item, result) in enumerate(
@@ -85,6 +100,7 @@ async def run_batch_import(
                     artist=item.artist,
                     genre=item.genre,
                     filename=item.filename,
+                    audio_path=str(item.path),
                     duration=duration,
                     feature_vector=vector,
                     created_at=utcnow(),

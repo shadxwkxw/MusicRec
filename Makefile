@@ -1,9 +1,12 @@
-.PHONY: install install-embeddings lock upgrade run test test-unit test-integration coverage smoke audit build \
+.PHONY: env install install-embeddings lock upgrade run test test-unit test-integration coverage smoke audit build \
         lint format typecheck clean \
         docker-build docker-up docker-down docker-logs \
-        batch-extract batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
-        docker-batch-extract docker-batch-rebuild docker-batch-tune docker-batch-recommend \
+        batch-extract batch-embed batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
+        docker-batch-extract docker-batch-embed docker-batch-rebuild docker-batch-tune docker-batch-recommend \
         migrate migration db-copy fma-unpack fma-import
+
+# .env (если есть) — те же переменные, что читает приложение; см. .env.example
+-include .env
 
 VENV := .venv
 PY   := $(VENV)/bin/python
@@ -11,6 +14,10 @@ export PYTHONPATH := $(CURDIR)/src:$(CURDIR)
 export UV_PROJECT_ENVIRONMENT := $(abspath $(VENV))
 
 # ── Local development ────────────────────────────────────────────
+# Создать .env из шаблона (существующий не трогает)
+env:
+	@test -f .env && echo ".env already exists" || (cp .env.example .env && echo "created .env from .env.example")
+
 # Точные версии из uv.lock; падает, если lock не соответствует pyproject.toml
 install:
 	uv sync --locked --extra dev
@@ -44,7 +51,10 @@ migration:
 
 # Перенос данных в пустую базу, по умолчанию из локальной SQLite в Postgres из docker-compose
 COPY_FROM ?= sqlite+aiosqlite:///data/recommender.db
-COPY_TO   ?= postgresql+asyncpg://recommender:recommender@localhost:5432/recommender
+POSTGRES_USER     ?= recommender
+POSTGRES_PASSWORD ?= recommender
+POSTGRES_DB       ?= recommender
+COPY_TO   ?= postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:5432/$(POSTGRES_DB)
 db-copy:
 	$(PY) scripts/copy_db.py --source "$(COPY_FROM)" --target "$(COPY_TO)"
 
@@ -96,6 +106,10 @@ API_URL   ?= http://localhost:8000
 batch-extract:
 	$(PY) services/batch/main.py extract --input-dir $(INPUT_DIR)
 
+# Эмбеддинги модели features.embedding_model для треков без них (нужен make install-embeddings)
+batch-embed:
+	$(PY) services/batch/main.py embed
+
 # Индекс пишется на диск; запущенный сервис подхватит его после make index-reload
 batch-rebuild:
 	$(PY) services/batch/main.py rebuild
@@ -143,6 +157,9 @@ docker-logs:
 docker-batch-extract:
 	docker compose --profile batch run --rm recommender-batch \
 		extract --input-dir /app/$(INPUT_DIR)
+
+docker-batch-embed:
+	docker compose --profile batch run --rm recommender-batch embed
 
 docker-batch-rebuild:
 	docker compose --profile batch run --rm recommender-batch rebuild

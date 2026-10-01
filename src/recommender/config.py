@@ -1,7 +1,9 @@
 """Настройки рекомендера: читает configs/config.yaml в типизированный Settings.
 
 Поддерживает подстановку переменных окружения вида ${VAR} или ${VAR:-default}.
-Путь к конфигу переопределяется через CONFIG_PATH.
+Перед этим подгружается .env из рабочей директории (путь меняется через
+ENV_FILE, пустое значение отключает): переменные, уже заданные в окружении,
+важнее файла. Путь к конфигу переопределяется через CONFIG_PATH.
 """
 
 import os
@@ -10,6 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 ENV_VAR_PATTERN = re.compile(r"^\$\{([^}]+)\}$")
@@ -57,6 +60,13 @@ class Settings(BaseModel):
     n_mfcc: int
     n_chroma: int
     n_contrast_bands: int
+    # Feature source
+    feature_source: Literal["librosa", "embedding"]
+    embedding_model: str
+    embedding_window_seconds: float = Field(gt=0)
+    embedding_max_windows: int = Field(ge=1)
+    embedding_batch_tracks: int = Field(ge=1)
+    embedding_loaders: int = Field(ge=1)
     # Recommendation
     default_rec_limit: int = Field(ge=1)
     candidate_multiplier: int = Field(ge=1)
@@ -80,6 +90,13 @@ class Settings(BaseModel):
     api_port: int
     api_tracks_page_size: int = Field(ge=1)
     api_tracks_page_max: int = Field(ge=1)
+
+    @property
+    def feature_source_id(self) -> str:
+        """Из чего строится индекс: librosa или embedding:<модель>."""
+        if self.feature_source == "embedding":
+            return f"embedding:{self.embedding_model}"
+        return "librosa"
 
     @property
     def feature_dim(self) -> int:
@@ -111,6 +128,15 @@ def _find_config_path() -> Path:
     return Path(__file__).parent / "default_config.yaml"
 
 
+def load_env_file() -> Path | None:
+    """Подгрузить .env (или $ENV_FILE), не перезаписывая заданные переменные."""
+    path = Path(os.getenv("ENV_FILE", ".env"))
+    if not os.getenv("ENV_FILE", ".env") or not path.is_file():
+        return None
+    load_dotenv(path, override=False)
+    return path
+
+
 def _load_config_dict() -> dict:
     with _find_config_path().open("r", encoding="utf-8") as f:
         return _resolve_env(yaml.safe_load(f))
@@ -128,6 +154,12 @@ def _build_settings(raw: dict) -> Settings:
         n_mfcc=raw["audio"]["n_mfcc"],
         n_chroma=raw["audio"]["n_chroma"],
         n_contrast_bands=raw["audio"]["n_contrast_bands"],
+        feature_source=raw["features"]["source"],
+        embedding_model=raw["features"]["embedding_model"],
+        embedding_window_seconds=raw["features"]["embedding_window_seconds"],
+        embedding_max_windows=raw["features"]["embedding_max_windows"],
+        embedding_batch_tracks=raw["features"]["embedding_batch_tracks"],
+        embedding_loaders=raw["features"]["embedding_loaders"],
         default_rec_limit=raw["recommendation"]["default_limit"],
         candidate_multiplier=raw["recommendation"]["candidate_multiplier"],
         default_metric=raw["recommendation"]["default_metric"],
@@ -151,6 +183,7 @@ def _build_settings(raw: dict) -> Settings:
     )
 
 
+load_env_file()
 settings = _build_settings(_load_config_dict())
 
 for _d in (settings.data_dir, settings.audio_dir, settings.index_dir, settings.models_dir):

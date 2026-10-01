@@ -16,8 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from recommender.infrastructure.storage.postgres import Base, init_db
 
-# Порядок важен: likes ссылаются на tracks
-TABLES = ["tracks", "likes", "automl_runs"]
+# Порядок важен: likes и track_embeddings ссылаются на tracks
+TABLES = ["tracks", "track_embeddings", "likes", "automl_runs"]
 SERIAL_TABLES = ["likes", "automl_runs"]
 
 

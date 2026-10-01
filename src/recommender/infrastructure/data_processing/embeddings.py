@@ -46,6 +46,8 @@ class ClapEmbedder:
         max_windows: int = 6,
         duration_limit: float | None = None,
         device: str | None = None,
+        batch_tracks: int = 32,
+        loaders: int = 8,
     ):
         import torch
         from transformers import ClapModel, ClapProcessor
@@ -55,6 +57,8 @@ class ClapEmbedder:
         self.window = int(window_seconds * SAMPLE_RATE)
         self.max_windows = max_windows
         self.duration_limit = duration_limit
+        self.batch_tracks = batch_tracks
+        self.loaders = loaders
         if device is None:
             device = (
                 "mps"
@@ -99,9 +103,7 @@ class ClapEmbedder:
         means = np.stack([per_window[owners == i].mean(axis=0) for i in range(len(waveforms))])
         return _normalize(means).astype(np.float32)
 
-    def embed_files(
-        self, paths: Sequence[str | Path], batch_tracks: int = 32, loaders: int = 8
-    ) -> Iterator[tuple[int, np.ndarray | str]]:
+    def embed_files(self, paths: Sequence[str | Path]) -> Iterator[tuple[int, np.ndarray | str]]:
         """(индекс пути, вектор или текст ошибки) пачками; аудио декодируется в потоках."""
 
         def safe_load(path: str | Path) -> np.ndarray | str:
@@ -110,9 +112,9 @@ class ClapEmbedder:
             except Exception as e:
                 return f"{type(e).__name__}: {e}"
 
-        with ThreadPoolExecutor(max_workers=loaders) as pool:
-            for start in range(0, len(paths), batch_tracks):
-                chunk = list(pool.map(safe_load, paths[start : start + batch_tracks]))
+        with ThreadPoolExecutor(max_workers=self.loaders) as pool:
+            for start in range(0, len(paths), self.batch_tracks):
+                chunk = list(pool.map(safe_load, paths[start : start + self.batch_tracks]))
                 ok = [(i, y) for i, y in enumerate(chunk) if not isinstance(y, str)]
                 if ok:
                     embedded = self.embed_waveforms([y for _, y in ok])

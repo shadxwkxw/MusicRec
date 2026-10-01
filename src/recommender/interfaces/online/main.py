@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from recommender.application.features import IndexSourceMismatchError, check_index_source
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import init_db
@@ -16,12 +17,15 @@ async def lifespan(app: FastAPI):
     await init_db()
 
     try:
-        app.state.engine = FaissRecommender.load()
-        app.state.normalizer = FeatureNormalizer.load()
-        print(f"✓ Loaded index with {app.state.engine.index.ntotal} tracks")
-    except Exception:
-        app.state.engine = FaissRecommender()
-        app.state.normalizer = FeatureNormalizer()
+        engine, normalizer = FaissRecommender.load(), FeatureNormalizer.load()
+        check_index_source(engine)
+        app.state.engine, app.state.normalizer = engine, normalizer
+        print(f"✓ Loaded index with {engine.index.ntotal} tracks ({engine.source})")
+    except IndexSourceMismatchError as e:
+        app.state.engine, app.state.normalizer = FaissRecommender(), FeatureNormalizer()
+        print(f"⚠ {e}. Starting with empty index")
+    except FileNotFoundError:
+        app.state.engine, app.state.normalizer = FaissRecommender(), FeatureNormalizer()
         print("⚡ Starting with empty index")
 
     yield

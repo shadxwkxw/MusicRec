@@ -13,16 +13,20 @@ from recommender.application.collaborative import (
     compute_like_boost,
     compute_user_like_boost,
 )
+from recommender.application.features import load_vectors
 from recommender.config import settings
 from recommender.domain.models import Recommendation
 from recommender.domain.recommender import Recommender
-from recommender.infrastructure.data_processing.extract import bytes_to_features
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
 from recommender.infrastructure.storage.postgres import LikeORM, TrackORM
 
 
 class TrackNotFoundError(LookupError):
-    """Трек или его фичи отсутствуют."""
+    """Трека нет в БД."""
+
+
+class FeaturesNotReadyError(LookupError):
+    """Трек есть, но векторов в текущем источнике признаков для него ещё нет."""
 
 
 class NoLikedTracksError(LookupError):
@@ -38,11 +42,13 @@ async def recommend_by_track(
     use_likes: bool = True,
 ) -> list[Recommendation]:
     """Рекомендации по треку: контентное сходство + коллаборативный бустинг."""
-    track = await db.get(TrackORM, track_id)
-    if not track or not track.feature_vector:
+    if await db.get(TrackORM, track_id) is None:
         raise TrackNotFoundError(track_id)
+    vectors = await load_vectors(db, [track_id])
+    if track_id not in vectors:
+        raise FeaturesNotReadyError(track_id)
 
-    features = bytes_to_features(track.feature_vector)
+    features = vectors[track_id]
     if normalizer.is_fitted:
         features = normalizer.transform(features).flatten()
 
@@ -71,12 +77,7 @@ async def recommend_for_user(
     if not liked_ids:
         raise NoLikedTracksError(user_id)
 
-    vectors = []
-    for tid in liked_ids:
-        track = await db.get(TrackORM, tid)
-        if track and track.feature_vector:
-            vectors.append(bytes_to_features(track.feature_vector))
-
+    vectors = list((await load_vectors(db, liked_ids)).values())
     if not vectors:
         raise NoLikedTracksError(user_id)
 

@@ -1,20 +1,24 @@
-x-db-env: &db-env
-  DB_URL: postgresql+asyncpg://recommender:recommender@postgres:5432/recommender
+# Логин, пароль и имя базы берутся из .env (см. .env.example), иначе — дефолты.
+# Они применяются при первом создании volume postgres-data: сменить пароль
+# существующей базы так нельзя, только пересоздав volume.
+x-app-env: &app-env
+  DB_URL: postgresql+asyncpg://${POSTGRES_USER:-recommender}:${POSTGRES_PASSWORD:-recommender}@postgres:5432/${POSTGRES_DB:-recommender}
+  FEATURE_SOURCE: ${FEATURE_SOURCE:-librosa}
 
 services:
   postgres:
     image: postgres:17
     container_name: recommender-postgres
     environment:
-      POSTGRES_USER: recommender
-      POSTGRES_PASSWORD: recommender
-      POSTGRES_DB: recommender
+      POSTGRES_USER: ${POSTGRES_USER:-recommender}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-recommender}
+      POSTGRES_DB: ${POSTGRES_DB:-recommender}
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U recommender -d recommender"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 2s
       timeout: 5s
       retries: 30
@@ -35,7 +39,7 @@ services:
       - ./services:/app/services
       - ./configs:/app/configs
     environment:
-      <<: *db-env
+      <<: *app-env
       PYTHONUNBUFFERED: "1"
       PYTHONPATH: /app/src:/app
     # Миграции применяются при старте (init_db в lifespan)
@@ -57,7 +61,7 @@ services:
       - ./configs:/app/configs
       - ./artifacts:/app/artifacts
     environment:
-      <<: *db-env
+      <<: *app-env
       PYTHONUNBUFFERED: "1"
       PYTHONPATH: /app/src:/app
     # Команда передаётся через docker compose run:

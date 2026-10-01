@@ -46,11 +46,23 @@ class TrackORM(Base):
     artist = Column(String, default="Unknown")
     genre = Column(String, nullable=True)
     filename = Column(String, nullable=False)
+    audio_path = Column(String, nullable=True)  # где лежит аудио: нужно для пересчёта признаков
     duration = Column(Float, nullable=True)
     feature_vector = Column(LargeBinary, nullable=True)  # numpy bytes
     created_at = Column(DateTime, default=utcnow)
 
     likes = relationship("LikeORM", back_populates="track")
+
+
+class TrackEmbeddingORM(Base):
+    """Эмбеддинг трека от предобученной модели; у трека может быть по одному на модель."""
+
+    __tablename__ = "track_embeddings"
+
+    track_id = Column(String, ForeignKey("tracks.id"), primary_key=True)
+    model = Column(String, primary_key=True)
+    vector = Column(LargeBinary, nullable=False)  # float32 bytes
+    created_at = Column(DateTime, default=utcnow)
 
 
 class LikeORM(Base):

@@ -39,6 +39,7 @@
 
 ```bash
 make install   # .venv с точными версиями из uv.lock + dev-зависимости
+make env       # .env из .env.example: источник признаков, БД, пароль Postgres
 make run       # API на http://localhost:8000, документация на /docs
 ```
 
@@ -109,6 +110,45 @@ curl http://localhost:8000/automl/status
 
 ## Признаки
 
+Источник векторов задаётся `features.source` (переменная `FEATURE_SOURCE`):
+
+- `librosa` (по умолчанию) — 82 признака из аудио, считаются при загрузке трека;
+- `embedding` — эмбеддинги предобученной модели `features.embedding_model`
+  (по умолчанию `laion/clap-htsat-unfused`, CLAP, вектор 512). На FMA с
+  artist filter доля того же жанра среди 10 соседей **0.53 против 0.34** у
+  librosa, и выше на каждом из 8 жанров.
+
+### Эмбеддинги
+
+```bash
+make install-embeddings                    # torch + transformers, веса ~1.2 ГБ скачаются при первом запуске
+make batch-embed                           # досчитать эмбеддинги треков без них (GPU Apple / CUDA, если есть)
+# FEATURE_SOURCE=embedding в .env (или в окружении), затем
+make batch-rebuild
+make run
+```
+
+- Модель видит не больше 10 секунд, поэтому трек режется на окна
+  (`embedding_window_seconds`, до `embedding_max_windows` окон), эмбеддинги
+  окон усредняются. Это детерминированно: по умолчанию модель вырезала бы
+  случайный кусок.
+- Online-сервис модель не грузит. Трек, загруженный через API в режиме
+  `embedding`, сохраняется с `indexed: false`, а в рекомендациях появляется
+  после `batch embed` и `rebuild` (удобно ставить в расписание). Запрос
+  рекомендаций для трека без эмбеддинга возвращает 409.
+- Эмбеддинги хранятся в таблице `track_embeddings` по одному на модель, так
+  что смена модели не стирает старые.
+- Индекс помнит, из какого источника собран. Если запустить сервис с другим
+  `FEATURE_SOURCE`, он стартует с пустым индексом и предупреждением, а
+  `/index/reload` и batch-команды откажутся работать — нужен `rebuild`.
+- Тюнинг для эмбеддингов подбирает нормализацию, метрику и вес буста;
+  групповые веса есть только у librosa-признаков.
+- `laion/larger_clap_music` не подходит: опубликованная для `transformers`
+  версия выдаёт одинаковый вектор для любого входа (обсуждение #2 на её
+  странице Hugging Face).
+
+### librosa-признаки
+
 | Группа | Размерность | Что описывает |
 |---|---|---|
 | MFCC (13 коэф., mean + std) | 26 | тембр |
@@ -167,6 +207,9 @@ curl http://localhost:8000/automl/status
 # импорт всех аудио из папки (уже импортированные по имени файла пропускаются)
 make batch-extract INPUT_DIR=data/audio_inbox
 .venv/bin/python services/batch/main.py extract --input-dir data/audio_inbox --workers 8
+
+# досчитать эмбеддинги (режим embedding, нужен make install-embeddings)
+make batch-embed
 
 # пересобрать индекс / подобрать параметры по лайкам, затем переключить сервис
 make batch-rebuild      # или make batch-tune
@@ -252,6 +295,27 @@ make db-copy                               # перенести данные и�
 
 Конфиг ищется так: `$CONFIG_PATH` → `./configs/config.yaml` → копия,
 встроенная в пакет (`src/recommender/default_config.yaml`).
+
+### Переменные окружения и `.env`
+
+Перед чтением конфига приложение подгружает `.env` из рабочей папки. Шаблон —
+[`.env.example`](.env.example), создать `.env` из него: `make env`. Сам `.env`
+в git не попадает. Переменные, заданные в окружении явно, важнее файла;
+`ENV_FILE=путь` читает другой файл, `ENV_FILE=` (пусто) отключает чтение.
+
+| Переменная | Что задаёт |
+|---|---|
+| `FEATURE_SOURCE` | `librosa` или `embedding` |
+| `DB_URL` | база приложения, по умолчанию локальная SQLite |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | Postgres в `docker-compose` и адрес для `make db-copy` |
+| `CONFIG_PATH` | другой файл конфига |
+
+Пароль Postgres применяется при первом создании volume `postgres-data`;
+чтобы сменить его у существующей базы, volume придётся пересоздать.
+
+Тесты и `make smoke` `.env` не читают и от `FEATURE_SOURCE` в окружении не
+зависят. В продакшене те же переменные передаются через секреты окружения
+(например, GitHub Secrets), а `.env` в образ не кладётся.
 
 `n_contrast_bands` не может быть больше 6 при `sample_rate: 22050`: верхняя
 полоса иначе выходит за частоту Найквиста.
@@ -344,5 +408,7 @@ tests/integration/         тесты API на временной SQLite
 - Индекс `IndexFlat` — точный полный перебор; каждая загрузка и удаление
   перезаписывают индекс на диске целиком. Для десятков тысяч треков нужен
   приближённый индекс и периодическое сохранение.
+- Docker-образы не включают `torch`: `batch embed` запускается локально или в
+  отдельном образе с `make install-embeddings`.
 - `make run` и `docker-compose` запускают uvicorn напрямую на порту 8000;
   `api.host` и `api.port` действуют только на точку входа `recommender-online`.

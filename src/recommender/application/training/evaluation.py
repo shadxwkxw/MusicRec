@@ -27,8 +27,8 @@ from recommender.application.collaborative import (
     load_user_likes,
     user_co_like_strength,
 )
+from recommender.application.features import check_index_source, load_vectors
 from recommender.config import settings
-from recommender.infrastructure.data_processing.extract import bytes_to_features
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import TrackORM
@@ -316,13 +316,13 @@ def genre_report(
 async def evaluate_saved_index(db: AsyncSession) -> dict[str, dict[str, dict[str, float]]]:
     """Оценить сохранённые индекс и нормализатор: отложенные лайки и жанры."""
     engine = FaissRecommender.load()
+    check_index_source(engine)
     normalizer = FeatureNormalizer.load()
-    result = await db.execute(select(TrackORM).where(TrackORM.feature_vector.isnot(None)))
-    rows: Sequence[TrackORM] = result.scalars().all()
+    vectors = await load_vectors(db)
+    rows: Sequence[TrackORM] = (await db.execute(select(TrackORM))).scalars().all()
     tracks = {t.id: t for t in rows}
-    track_ids = [t for t in engine.track_ids if t in tracks]
-    raw = np.array([bytes_to_features(tracks[t].feature_vector) for t in track_ids])
-    normalized = normalizer.transform(raw)
+    track_ids = [t for t in engine.track_ids if t in vectors and t in tracks]
+    normalized = normalizer.transform(np.stack([vectors[t] for t in track_ids]))
 
     id_to_idx = {t: i for i, t in enumerate(track_ids)}
     train, test = split_likes(

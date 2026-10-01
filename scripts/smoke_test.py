@@ -48,6 +48,7 @@ def write_config(work: Path) -> Path:
     }
     config["database"]["url"] = f"sqlite+aiosqlite:///{data / 'smoke.db'}"
     config["tuning"]["n_trials"] = 5
+    config["features"]["source"] = "librosa"  # smoke не зависит от torch и FEATURE_SOURCE
     path = work / "config.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
@@ -103,7 +104,8 @@ class Server:
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="recommender-smoke-") as tmp:
         work = Path(tmp)
-        env = {**os.environ, "CONFIG_PATH": str(write_config(work))}
+        # ENV_FILE="" — не читать .env разработчика: smoke работает со своим конфигом
+        env = {**os.environ, "CONFIG_PATH": str(write_config(work)), "ENV_FILE": ""}
         audio = make_audio(work / "src_audio")
         log = work / "server.log"
 

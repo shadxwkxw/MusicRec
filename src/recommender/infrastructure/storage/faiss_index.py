@@ -25,8 +25,12 @@ class FaissRecommender(Recommender):
         dimension: int | None = None,
         metric: Metric | None = None,
         boost_weight: float | None = None,
+        source: str | None = None,
     ):
         self.dimension = dimension or settings.feature_dim
+        # Из чего собраны векторы индекса (settings.feature_source_id): индекс
+        # из эмбеддингов нельзя использовать с librosa-запросами и наоборот
+        self.source = source or settings.feature_source_id
         self.metric = metric or settings.default_metric
         self.boost_weight = settings.default_boost_weight if boost_weight is None else boost_weight
         self.index = self._new_index()
@@ -131,6 +135,7 @@ class FaissRecommender(Recommender):
                 "metric": self.metric,
                 "dim": self.dimension,
                 "boost_weight": self.boost_weight,
+                "source": self.source,
             },
             path / "meta.joblib",
         )
@@ -143,6 +148,7 @@ class FaissRecommender(Recommender):
             dimension=meta["dim"],
             metric=meta["metric"],
             boost_weight=meta.get("boost_weight", settings.default_boost_weight),
+            source=meta.get("source", "librosa"),
         )
         engine.index = faiss.read_index(str(path / "faiss.index"))
         engine.track_ids = meta["track_ids"]
