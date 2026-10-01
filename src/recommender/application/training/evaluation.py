@@ -15,7 +15,7 @@
 
 import random
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -102,6 +102,19 @@ def holdout_queries(train: UserLikes, test: UserLikes, known: set[str]) -> list[
         for target in sorted(targets):
             queries += _queries_for(tuple(sorted(seen)), target, train)
     return queries
+
+
+def split_by_artist(
+    track_ids: Collection[str], artists: Mapping[str, str], test_fraction: float, seed: int
+) -> tuple[list[str], list[str]]:
+    """Отложить долю артистов целиком: треки одного артиста не попадут по обе стороны."""
+    names = sorted({artists.get(t, "") for t in track_ids})
+    random.Random(seed).shuffle(names)
+    n_test = min(len(names) - 1, round(len(names) * test_fraction)) if len(names) > 1 else 0
+    test_artists = set(names[:n_test])
+    tune = sorted(t for t in track_ids if artists.get(t, "") not in test_artists)
+    test = sorted(t for t in track_ids if artists.get(t, "") in test_artists)
+    return tune, test
 
 
 # ── Ранжировщики ─────────────────────────────────────────────────
@@ -244,20 +257,23 @@ def genre_report(
     genres: Mapping[str, str | None],
     artists: Mapping[str, str],
     k: int | None = None,
+    query_ids: Collection[str] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Доля того же жанра среди k ближайших (без буста) против случайного уровня.
 
     filtered — то же, но треки того же артиста исключены из соседей (artist
     filter): иначе метрика отчасти меряет «нашёл других треков артиста».
-    Случайный уровень считается точно для каждого трека. Строки: all и каждый
-    жанр. Пусто, если меток нет.
+    Случайный уровень считается точно для каждого трека. query_ids ограничивает
+    запросы (кандидаты — весь индекс). Строки: all и каждый жанр. Пусто, если
+    меток нет.
     """
     k = k or settings.tuning_eval_k
-    labeled = [t for t in id_to_idx if genres.get(t)]
+    queries = id_to_idx if query_ids is None else [t for t in query_ids if t in id_to_idx]
+    labeled = [t for t in queries if genres.get(t)]
     if not labeled:
         return {}
     n_tracks = len(id_to_idx)
-    genre_size = Counter(genres[t] for t in labeled)
+    genre_size = Counter(genres[t] for t in id_to_idx if genres.get(t))
     by_artist: dict[str, set[str]] = {}
     for track_id in id_to_idx:
         by_artist.setdefault(artists.get(track_id, ""), set()).add(track_id)

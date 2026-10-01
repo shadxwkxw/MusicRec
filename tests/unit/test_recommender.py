@@ -294,6 +294,18 @@ class TestEvaluate:
 
 
 class TestHoldout:
+    def test_split_by_artist_never_shares_an_artist(self):
+        from recommender.application.training.evaluation import split_by_artist
+
+        artists = {f"t{i}": f"artist{i % 10}" for i in range(50)}
+
+        tune, test = split_by_artist(list(artists), artists, test_fraction=0.2, seed=3)
+
+        assert len({artists[t] for t in test}) == 2
+        assert {artists[t] for t in tune}.isdisjoint({artists[t] for t in test})
+        assert sorted(tune + test) == sorted(artists)
+        assert split_by_artist(list(artists), artists, 0.2, seed=3) == (tune, test)
+
     def test_split_keeps_train_for_everyone_and_is_deterministic(self):
         from recommender.application.training.evaluation import split_likes
 

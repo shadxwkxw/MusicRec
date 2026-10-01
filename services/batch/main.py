@@ -104,8 +104,18 @@ async def _tune(args: argparse.Namespace) -> None:
         except Exception as e:
             raise SystemExit(f"Tuning run {run_id} failed: {e}") from e
     train = ", ".join(f"{name}={value:.3f}" for name, value in result["train"].items())
-    print(f"Tuning run {run_id} done: best_score={result['best_score']:.3f} (train: {train})")
+    print(
+        f"Tuning run {run_id} done ({result['objective']} objective): "
+        f"best_score={result['best_score']:.3f} (train: {train})"
+    )
+    params = result["best_params"]
+    print(
+        f"  params: {params['metric']}, {params['norm_method']}, "
+        f"boost={params['boost_weight']:.2f}, "
+        + ", ".join(f"{k[2:]}={v:.2f}" for k, v in params.items() if k.startswith("w_"))
+    )
     _print_report(result["holdout"], result["test_likes"])
+    _print_table("Same-genre share on held-out artists", result["genre_test"], "no genre labels")
 
 
 async def _evaluate(args: argparse.Namespace) -> None:

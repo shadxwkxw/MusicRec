@@ -71,6 +71,8 @@ class Settings(BaseModel):
     tuning_max_boost_weight: float = Field(ge=0)
     tuning_norm_methods: list[NormMethod] = Field(min_length=1)
     tuning_metrics: list[Metric] = Field(min_length=1)
+    tuning_objective: Literal["auto", "genre", "likes"]
+    tuning_min_genre_tracks: int = Field(ge=2)
     tuning_test_fraction: float = Field(ge=0, lt=1)
     tuning_seed: int
     # API
@@ -138,6 +140,8 @@ def _build_settings(raw: dict) -> Settings:
         tuning_max_boost_weight=raw["tuning"]["max_boost_weight"],
         tuning_norm_methods=raw["tuning"]["norm_methods"],
         tuning_metrics=raw["tuning"]["metrics"],
+        tuning_objective=raw["tuning"]["objective"],
+        tuning_min_genre_tracks=raw["tuning"]["min_genre_tracks"],
         tuning_test_fraction=raw["tuning"]["test_fraction"],
         tuning_seed=raw["tuning"]["seed"],
         api_host=raw["api"]["host"],

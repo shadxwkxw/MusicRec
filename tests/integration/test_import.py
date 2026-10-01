@@ -106,3 +106,59 @@ async def test_evaluate_saved_index_reports_genres(api, audio_files, tmp_path):
     # 2 других трека того же жанра из 5 других
     assert genre["Rock"]["random@10"] == pytest.approx(2 / 5)
     assert report["holdout"] == {}  # лайков нет
+
+
+async def _seed_genres(api, audio_files, tmp_path) -> list[str]:
+    from recommender.application.index.build_index import rebuild_index
+
+    items = []
+    for i, path in enumerate(audio_files):
+        copy = tmp_path / f"genre_{i}.wav"
+        shutil.copy(path, copy)
+        items.append(ImportItem(copy, copy.name, copy.stem, f"A{i % 4}", ["Rock", "Jazz"][i % 2]))
+    async with api.sessions() as db:
+        await run_batch_import(items, db)
+        await rebuild_index(db)
+        tracks = (await db.execute(select(TrackORM).order_by(TrackORM.filename))).scalars().all()
+    return [t.id for t in tracks]
+
+
+async def test_genre_tuning_without_likes_uses_config_boost(
+    api, audio_files, tmp_path, monkeypatch
+):
+    from recommender.config import settings
+
+    monkeypatch.setattr(settings, "tuning_min_genre_tracks", 4)
+    await _seed_genres(api, audio_files, tmp_path)
+
+    await api.client.post("/automl/train")
+    run = (await api.client.get("/automl/status")).json()[0]
+
+    assert run["status"] == "completed", run
+    assert run["metrics"]["objective"] == "genre"
+    assert "filtered@10" in run["metrics"]["train"]
+    assert run["metrics"]["genre_test"]["all"]["tracks"] > 0
+    assert run["best_params"]["boost_weight"] == settings.default_boost_weight
+
+
+async def test_genre_tuning_picks_boost_from_likes(api, audio_files, tmp_path, monkeypatch):
+    import numpy as np
+
+    from recommender.config import settings
+    from recommender.interfaces.online.main import app
+
+    monkeypatch.setattr(settings, "tuning_min_genre_tracks", 4)
+    ids = await _seed_genres(api, audio_files, tmp_path)
+    for tid in ids[:4]:
+        await api.like("u1", tid)
+    for tid in ids[1:5]:
+        await api.like("u2", tid)
+
+    await api.client.post("/automl/train")
+    run = (await api.client.get("/automl/status")).json()[0]
+
+    assert run["status"] == "completed", run
+    boost = run["best_params"]["boost_weight"]
+    grid = np.linspace(0.0, settings.tuning_max_boost_weight, 13)
+    assert np.isclose(grid, boost).any()
+    assert app.state.engine.boost_weight == pytest.approx(boost)
