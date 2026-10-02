@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from recommender.application.features import IndexSourceMismatchError, check_index_source
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
+from recommender.infrastructure.storage.artifacts import load_current
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import init_db
 from recommender.interfaces.online.routes import router
@@ -17,10 +18,13 @@ async def lifespan(app: FastAPI):
     await init_db()
 
     try:
-        engine, normalizer = FaissRecommender.load(), FeatureNormalizer.load()
+        artifacts = load_current()
+        engine, normalizer = artifacts.engine, artifacts.normalizer
         check_index_source(engine)
         app.state.engine, app.state.normalizer = engine, normalizer
-        print(f"✓ Loaded index with {engine.index.ntotal} tracks ({engine.source})")
+        print(
+            f"✓ Loaded index {engine.version} with {engine.index.ntotal} tracks ({engine.source})"
+        )
     except IndexSourceMismatchError as e:
         app.state.engine, app.state.normalizer = FaissRecommender(), FeatureNormalizer()
         print(f"⚠ {e}. Starting with empty index")

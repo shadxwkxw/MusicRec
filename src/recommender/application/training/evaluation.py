@@ -29,7 +29,7 @@ from recommender.application.collaborative import (
 )
 from recommender.application.features import check_index_source, load_vectors
 from recommender.config import settings
-from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
+from recommender.infrastructure.storage.artifacts import load_current
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import TrackORM
 
@@ -315,9 +315,9 @@ def genre_report(
 
 async def evaluate_saved_index(db: AsyncSession) -> dict[str, dict[str, dict[str, float]]]:
     """Оценить сохранённые индекс и нормализатор: отложенные лайки и жанры."""
-    engine = FaissRecommender.load()
+    artifacts = load_current()
+    engine, normalizer = artifacts.engine, artifacts.normalizer
     check_index_source(engine)
-    normalizer = FeatureNormalizer.load()
     vectors = await load_vectors(db)
     rows: Sequence[TrackORM] = (await db.execute(select(TrackORM))).scalars().all()
     tracks = {t.id: t for t in rows}

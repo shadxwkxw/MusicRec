@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from recommender.application.features import load_vectors, uses_embeddings
 from recommender.config import settings
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
+from recommender.infrastructure.storage.artifacts import load_current, publish
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 
 
@@ -37,25 +38,25 @@ def _saved_params(dim: int) -> tuple[str, np.ndarray | None, str, float]:
     его параметры к новым векторам не подходят — берутся дефолты из конфига.
     """
     try:
-        prev_engine = FaissRecommender.load()
-        prev_norm = FeatureNormalizer.load()
+        previous = load_current()
     except FileNotFoundError:
-        prev_engine = prev_norm = None
-    if prev_engine is None or prev_norm is None or prev_engine.dimension != dim:
+        previous = None
+    if previous is None or previous.engine.dimension != dim:
         return (
             settings.default_norm_method,
             None,
             settings.default_metric,
             settings.default_boost_weight,
         )
-    return prev_norm.method, prev_norm.weights, prev_engine.metric, prev_engine.boost_weight
+    norm, engine = previous.normalizer, previous.engine
+    return norm.method, norm.weights, engine.metric, engine.boost_weight
 
 
 async def rebuild_index(db: AsyncSession) -> BuildIndexResult:
     """Пересобрать индекс и нормализатор из всех треков с векторами в текущем источнике.
 
     Returns:
-        Свежий движок/нормализатор и статистика. Оба уже сохранены на диск.
+        Свежий движок/нормализатор и статистика; опубликованы новой версией на диске.
     """
     vectors = await load_vectors(db)
     if not vectors:
@@ -70,13 +71,12 @@ async def rebuild_index(db: AsyncSession) -> BuildIndexResult:
 
     normalizer = FeatureNormalizer(method=method, weights=weights)
     normalized = normalizer.fit_transform(features)
-    normalizer.save()
 
     engine = FaissRecommender(
         dimension=normalized.shape[1], metric=metric, boost_weight=boost_weight
     )
     engine.rebuild(track_ids, normalized)
-    engine.save()
+    publish(engine, normalizer)
 
     return BuildIndexResult(
         engine=engine,

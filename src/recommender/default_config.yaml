@@ -28,6 +28,11 @@ features:
   embedding_batch_tracks: 32
   embedding_loaders: 8             # потоков декодирования аудио
 
+index:
+  # Каждая сборка индекса — отдельная неизменяемая версия в paths.index_dir/versions,
+  # текущая указана в CURRENT. Хранятся последние keep_versions
+  keep_versions: 3
+
 recommendation:
   default_limit: 10          # сколько рекомендаций по умолчанию (API и batch --top-n)
   candidate_multiplier: 3    # FAISS ищет limit * N кандидатов, чтобы хватило после фильтрации

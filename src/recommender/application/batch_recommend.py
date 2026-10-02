@@ -14,8 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from recommender.application.collaborative import co_like_strength, load_user_likes
 from recommender.application.features import check_index_source, load_vectors
 from recommender.config import settings
-from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
-from recommender.infrastructure.storage.faiss_index import FaissRecommender
+from recommender.infrastructure.storage.artifacts import load_current
 
 
 @dataclass
@@ -44,12 +43,9 @@ async def run_batch_recommend(
     Returns:
         Статистика и путь до результата.
     """
-    engine = FaissRecommender.load()
+    artifacts = load_current()
+    engine, normalizer = artifacts.engine, artifacts.normalizer
     check_index_source(engine)
-    try:
-        normalizer = FeatureNormalizer.load()
-    except FileNotFoundError:
-        normalizer = None
 
     vectors = await load_vectors(db)
     if not vectors:
@@ -60,7 +56,7 @@ async def run_batch_recommend(
 
     rows: list[tuple[str, int, str, float]] = []
     for track_id, features in vectors.items():
-        if normalizer is not None and normalizer.is_fitted:
+        if normalizer.is_fitted:
             features = normalizer.transform(features).flatten()
 
         boost = co_like_strength(track_id, user_likes) if use_likes else None

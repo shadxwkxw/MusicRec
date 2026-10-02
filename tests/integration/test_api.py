@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import func, select
 
 from recommender.config import settings
-from recommender.infrastructure.storage.faiss_index import FaissRecommender
+from recommender.infrastructure.storage.artifacts import load_current
 from recommender.infrastructure.storage.postgres import LikeORM
 from recommender.interfaces.online.main import app
 
@@ -66,7 +66,7 @@ async def test_first_rebuild_uses_config_defaults(api, monkeypatch):
 
     await api.seed(3)
 
-    engine = FaissRecommender.load()
+    engine = load_current().engine
     assert (engine.metric, engine.boost_weight) == ("euclidean", 0.9)
     assert app.state.normalizer.method == "minmax"
 
@@ -89,7 +89,7 @@ async def test_rebuild_indexes_everything_and_persists(api):
         "feature_dim": settings.feature_dim,
     }
     assert all(t["indexed"] for t in (await _tracks(api)).values())
-    assert set(FaissRecommender.load().track_ids) == set(ids)
+    assert set(load_current().engine.track_ids) == set(ids)
 
 
 async def test_upload_after_rebuild_is_indexed_and_saved(api):
@@ -98,7 +98,7 @@ async def test_upload_after_rebuild_is_indexed_and_saved(api):
     track = await api.upload(3)
 
     assert track["indexed"] is True
-    assert track["id"] in FaissRecommender.load().track_ids
+    assert track["id"] in load_current().engine.track_ids
 
 
 async def test_reload_picks_up_index_rebuilt_outside_the_service(api, audio_files):
@@ -290,7 +290,7 @@ async def test_delete_removes_track_everywhere(api):
     assert victim not in await _tracks(api)
     assert list(settings.audio_dir.glob(f"{victim}_*")) == []
     assert victim not in app.state.engine.track_ids
-    assert victim not in FaissRecommender.load().track_ids
+    assert victim not in load_current().engine.track_ids
     async with api.sessions() as s:
         likes_left = await s.scalar(
             select(func.count()).select_from(LikeORM).where(LikeORM.track_id == victim)
@@ -366,3 +366,35 @@ async def test_tuning_params_reach_queries_and_survive_rebuild(api):
     assert app.state.engine.boost_weight == pytest.approx(best["boost_weight"])
     assert app.state.normalizer.method == best["norm_method"]
     np.testing.assert_allclose(app.state.normalizer.weights, weights_before)
+
+
+async def test_service_changes_land_on_top_of_newer_batch_index(api, audio_files, tmp_path):
+    import shutil
+
+    from recommender.application.batch_extract import ImportItem, run_batch_import
+    from recommender.application.index.build_index import rebuild_index
+
+    ids = await api.seed(2)
+    stale_version = app.state.engine.version
+
+    # batch-процесс импортирует 2 трека и публикует новую сборку; сервис о ней не знает
+    copies = []
+    for i in (5, 6):
+        copy = tmp_path / f"batch_{i}.wav"
+        shutil.copy(audio_files[i], copy)
+        copies.append(ImportItem(copy, copy.name, copy.stem, "Batch"))
+    async with api.sessions() as db:
+        await run_batch_import(copies, db)
+        await rebuild_index(db)
+    batch_version = load_current().engine.version
+    assert app.state.engine.version == stale_version != batch_version
+
+    uploaded = await api.upload(3)
+    assert (await api.client.delete(f"/tracks/{ids[0]}")).status_code == 204
+
+    on_disk = load_current().engine
+    # загрузка и удаление применены поверх сборки batch, а не поверх устаревшего индекса
+    assert len(on_disk.track_ids) == 2 + 2 + 1 - 1
+    assert uploaded["id"] in on_disk.track_ids and ids[0] not in on_disk.track_ids
+    assert app.state.engine.version == on_disk.version
+    assert set(app.state.engine.track_ids) == set(on_disk.track_ids)

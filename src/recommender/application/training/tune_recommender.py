@@ -41,6 +41,7 @@ from recommender.application.training.evaluation import (
 )
 from recommender.config import settings
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
+from recommender.infrastructure.storage.artifacts import publish
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import AutoMLRunORM, TrackORM, utcnow
 
@@ -189,8 +190,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     run.completed_at = utcnow()
     await db.commit()
 
-    normalizer.save()
-    engine.save()
+    publish(engine, normalizer)
 
     return {
         "best_score": study.best_value,

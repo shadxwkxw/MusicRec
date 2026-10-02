@@ -67,6 +67,8 @@ class Settings(BaseModel):
     embedding_max_windows: int = Field(ge=1)
     embedding_batch_tracks: int = Field(ge=1)
     embedding_loaders: int = Field(ge=1)
+    # Index
+    index_keep_versions: int = Field(ge=2)
     # Recommendation
     default_rec_limit: int = Field(ge=1)
     candidate_multiplier: int = Field(ge=1)
@@ -160,6 +162,7 @@ def _build_settings(raw: dict) -> Settings:
         embedding_max_windows=raw["features"]["embedding_max_windows"],
         embedding_batch_tracks=raw["features"]["embedding_batch_tracks"],
         embedding_loaders=raw["features"]["embedding_loaders"],
+        index_keep_versions=raw["index"]["keep_versions"],
         default_rec_limit=raw["recommendation"]["default_limit"],
         candidate_multiplier=raw["recommendation"]["candidate_multiplier"],
         default_metric=raw["recommendation"]["default_metric"],

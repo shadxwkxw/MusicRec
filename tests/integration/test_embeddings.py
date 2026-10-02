@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from recommender.application.batch_embed import run_batch_embed
 from recommender.application.batch_extract import ImportItem, run_batch_import
 from recommender.config import settings
+from recommender.infrastructure.storage.artifacts import load_current, publish
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import TrackEmbeddingORM, TrackORM
 from recommender.interfaces.online.main import app
@@ -104,17 +105,15 @@ async def test_embedding_mode_end_to_end(api, embedding_mode):
     assert late["id"] not in app.state.engine.track_ids
     await _embed(api)
     await api.client.post("/index/rebuild")
-    assert late["id"] in FaissRecommender.load().track_ids
+    assert late["id"] in load_current().engine.track_ids
 
 
 async def test_switching_to_embeddings_drops_librosa_tuned_params(api, monkeypatch):
-    from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
-
     await api.seed(4)
     # Как после тюнинга на librosa: у нормализатора сохранены 82 веса групп
-    tuned = FeatureNormalizer.load()
-    tuned.weights = np.full(settings.feature_dim, 2.0, dtype=np.float32)
-    tuned.save()
+    current = load_current()
+    current.normalizer.weights = np.full(settings.feature_dim, 2.0, dtype=np.float32)
+    publish(current.engine, current.normalizer)
 
     monkeypatch.setattr(settings, "feature_source", "embedding")
     monkeypatch.setattr(settings, "embedding_model", FakeEmbedder.model_name)
@@ -218,7 +217,7 @@ async def test_index_from_other_source_is_refused(api, monkeypatch, tmp_path):
     from recommender.application.features import IndexSourceMismatchError
 
     await api.seed(3)  # индекс на librosa
-    assert FaissRecommender.load().source == "librosa"
+    assert load_current().engine.source == "librosa"
 
     monkeypatch.setattr(settings, "feature_source", "embedding")
     monkeypatch.setattr(settings, "embedding_model", FakeEmbedder.model_name)

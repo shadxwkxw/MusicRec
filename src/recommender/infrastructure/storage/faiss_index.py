@@ -31,6 +31,7 @@ class FaissRecommender(Recommender):
         # Из чего собраны векторы индекса (settings.feature_source_id): индекс
         # из эмбеддингов нельзя использовать с librosa-запросами и наоборот
         self.source = source or settings.feature_source_id
+        self.version: str | None = None  # id версии на диске (storage/artifacts.py)
         self.metric = metric or settings.default_metric
         self.boost_weight = settings.default_boost_weight if boost_weight is None else boost_weight
         self.index = self._new_index()

@@ -4,7 +4,7 @@ import json
 import logging
 import shutil
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import librosa
 from fastapi import (
@@ -44,6 +44,11 @@ from recommender.infrastructure.data_processing.extract import (
     features_to_bytes,
 )
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
+from recommender.infrastructure.storage.artifacts import (
+    IndexArtifacts,
+    load_current,
+    update_current,
+)
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import (
     AutoMLRunORM,
@@ -74,6 +79,23 @@ def _engine(request: Request) -> FaissRecommender:
 
 def _normalizer(request: Request) -> FeatureNormalizer:
     return request.app.state.normalizer
+
+
+def _compatible(artifacts: IndexArtifacts) -> bool:
+    return artifacts.engine.source == settings.feature_source_id
+
+
+def _update_index(request: Request, change: Callable[[IndexArtifacts], bool]) -> IndexArtifacts:
+    """Изменить индекс поверх актуальной версии на диске и переключить сервис на результат.
+
+    Если batch уже опубликовал более новую версию, изменение применяется к ней,
+    а не перетирает её устаревшим индексом из памяти.
+    """
+    state = request.app.state
+    artifacts = update_current(IndexArtifacts(state.engine, state.normalizer), change)
+    if _compatible(artifacts):
+        state.engine, state.normalizer = artifacts.engine, artifacts.normalizer
+    return artifacts
 
 
 # ──────────────────────────────────────────
@@ -122,13 +144,16 @@ async def upload_track(
     # Сразу в индекс — только если индекс на librosa-признаках и нормализатор
     # уже обучен (иначе сырые признаки смешаются с нормализованными). В режиме
     # embedding эмбеддинг досчитает batch embed, трек появится после rebuild.
-    engine = _engine(request)
-    normalizer = _normalizer(request)
-    indexed = normalizer.is_fitted and not uses_embeddings()
-    if indexed:
-        norm_features = normalizer.transform(features)
-        engine.add_tracks([track_id], norm_features)
-        engine.save()
+    indexed = False
+    if not uses_embeddings():
+
+        def add(artifacts: IndexArtifacts) -> bool:
+            if not _compatible(artifacts) or not artifacts.normalizer.is_fitted:
+                return False
+            artifacts.engine.add_tracks([track_id], artifacts.normalizer.transform(features))
+            return True
+
+        indexed = track_id in _update_index(request, add).engine.track_ids
 
     return TrackResponse(
         id=track_id,
@@ -202,10 +227,8 @@ async def delete_track(request: Request, track_id: str, db: AsyncSession = Depen
     await db.commit()
     filepath.unlink(missing_ok=True)
 
-    engine = _engine(request)
-    if engine.remove_tracks({track_id}):
-        # Сохраняем, иначе после рестарта удалённый трек вернётся в индекс с диска.
-        engine.save()
+    # Публикуем новую версию, иначе после рестарта удалённый трек вернётся из индекса на диске
+    _update_index(request, lambda artifacts: bool(artifacts.engine.remove_tracks({track_id})))
 
 
 @router.get("/tracks/{track_id}/features", response_model=TrackFeaturesResponse)
@@ -343,8 +366,8 @@ async def start_tuning(
             except Exception:
                 logger.exception("Tuning run %s failed", run_id)  # статус failed уже записан
                 return
-        app_state.engine = FaissRecommender.load()
-        app_state.normalizer = FeatureNormalizer.load()
+        artifacts = load_current()
+        app_state.engine, app_state.normalizer = artifacts.engine, artifacts.normalizer
 
     background_tasks.add_task(_train)
     return {"run_id": run_id, "status": "started"}
@@ -394,8 +417,8 @@ async def rebuild_index_endpoint(request: Request, db: AsyncSession = Depends(ge
 async def reload_index(request: Request):
     """Подхватить индекс и нормализатор с диска, например после batch rebuild / tune."""
     try:
-        engine = FaissRecommender.load()
-        normalizer = FeatureNormalizer.load()
+        artifacts = load_current()
+        engine, normalizer = artifacts.engine, artifacts.normalizer
     except FileNotFoundError as e:
         raise HTTPException(409, "No saved index yet, run /index/rebuild first") from e
     try:
@@ -405,4 +428,9 @@ async def reload_index(request: Request):
 
     request.app.state.engine = engine
     request.app.state.normalizer = normalizer
-    return {"status": "ok", "tracks_indexed": engine.index.ntotal, "metric": engine.metric}
+    return {
+        "status": "ok",
+        "tracks_indexed": engine.index.ntotal,
+        "metric": engine.metric,
+        "version": engine.version,
+    }
