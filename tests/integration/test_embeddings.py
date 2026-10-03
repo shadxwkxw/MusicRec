@@ -19,7 +19,7 @@ DIM = 16
 
 
 class FakeEmbedder:
-    """Вектор детерминированно зависит от содержимого файла."""
+    """Вектор единичной длины, детерминированно зависит от содержимого файла."""
 
     model_name = "fake/model"
 
@@ -34,7 +34,8 @@ class FakeEmbedder:
                 yield i, "RuntimeError: cannot decode"
                 continue
             seed = zlib.crc32(Path(path).read_bytes())
-            yield i, np.random.default_rng(seed).standard_normal(DIM).astype(np.float32)
+            vector = np.random.default_rng(seed).standard_normal(DIM).astype(np.float32)
+            yield i, vector / np.linalg.norm(vector)  # как у CLAP: единичная длина
 
 
 @pytest.fixture

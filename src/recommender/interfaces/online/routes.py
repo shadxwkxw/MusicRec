@@ -34,6 +34,11 @@ from recommender.application.recommend import (
     recommend_by_track,
     recommend_for_user,
 )
+from recommender.application.search import (
+    TextEncoder,
+    TextSearchNotSupportedError,
+    search_tracks,
+)
 from recommender.application.training.tune_recommender import (
     create_tuning_run,
     execute_tuning_run,
@@ -44,6 +49,7 @@ from recommender.infrastructure.data_processing.extract import (
     features_to_bytes,
 )
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
+from recommender.infrastructure.data_processing.text_worker import ProcessTextEncoder
 from recommender.infrastructure.storage.artifacts import (
     IndexArtifacts,
     load_current,
@@ -64,6 +70,7 @@ from recommender.interfaces.online.schemas import (
     LikeResponse,
     RecommendationItem,
     RecommendationResponse,
+    SearchResponse,
     TrackFeaturesResponse,
     TrackResponse,
     TrackUpdate,
@@ -262,10 +269,51 @@ async def _enrich(db: AsyncSession, recs) -> list[RecommendationItem]:
                     track_id=rec.track_id,
                     title=t.title,
                     artist=t.artist,
+                    genre=t.genre,
                     score=round(rec.score, 4),
                 )
             )
     return items
+
+
+def _load_text_encoder() -> TextEncoder:
+    # В отдельном процессе: torch и faiss в одном процессе на macOS конфликтуют (OpenMP)
+    return ProcessTextEncoder(
+        "recommender.infrastructure.data_processing.text_encoder:ClapTextEncoder",
+        settings.embedding_model,
+    )
+
+
+def _text_encoder(request: Request) -> TextEncoder:
+    """Текстовая модель грузится при первом поиске: без поиска сервис остаётся лёгким."""
+    state = request.app.state
+    if getattr(state, "text_encoder", None) is None:
+        try:
+            state.text_encoder = _load_text_encoder()
+        except ImportError as e:
+            raise HTTPException(
+                501,
+                "Text search needs torch and transformers "
+                "(make install-embeddings, or ONLINE_EXTRAS=embeddings for Docker)",
+            ) from e
+    return state.text_encoder
+
+
+@router.get("/search", response_model=SearchResponse)
+async def search(
+    request: Request,
+    q: str = Query(min_length=1, max_length=500, description="Описание на английском"),
+    limit: int = Query(settings.default_rec_limit, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Треки по текстовому описанию: «calm acoustic folk», «energetic hip-hop beat»."""
+    try:
+        recs = search_tracks(
+            q, _engine(request), _normalizer(request), _text_encoder(request), limit=limit
+        )
+    except TextSearchNotSupportedError as e:
+        raise HTTPException(409, f"{e} (set FEATURE_SOURCE=embedding and rebuild)") from e
+    return SearchResponse(query=q, results=await _enrich(db, recs))
 
 
 @router.get("/recommendations/{track_id}", response_model=RecommendationResponse)

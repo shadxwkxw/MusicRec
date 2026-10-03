@@ -34,6 +34,10 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    encoder = getattr(app.state, "text_encoder", None)
+    if encoder is not None and hasattr(encoder, "close"):
+        encoder.close()
+
 
 app = FastAPI(
     title="Music Recommender API",

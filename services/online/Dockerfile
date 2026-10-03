@@ -15,13 +15,16 @@ COPY --from=ghcr.io/astral-sh/uv:0.10.11 /uv /bin/uv
 # Ставим в системный Python образа; --inexact не трогает pip и прочие базовые пакеты
 ENV UV_PROJECT_ENVIRONMENT=/usr/local UV_LINK_MODE=copy UV_NO_CACHE=1
 
+# EXTRAS=embeddings добавляет torch и transformers для GET /search
+ARG EXTRAS=""
+
 # Зависимости отдельным слоем: правки в src/ не пересобирают тяжёлые пакеты
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --locked --inexact --no-install-project
+RUN uv sync --locked --inexact --no-install-project ${EXTRAS:+--extra $EXTRAS}
 
 COPY src/ src/
 COPY services/ services/
-RUN uv sync --locked --inexact --no-editable
+RUN uv sync --locked --inexact --no-editable ${EXTRAS:+--extra $EXTRAS}
 
 COPY configs/ configs/
 RUN mkdir -p data/audio data/index data/models

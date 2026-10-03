@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 ENV_VAR_PATTERN = re.compile(r"^\$\{([^}]+)\}$")
 
@@ -67,6 +67,8 @@ class Settings(BaseModel):
     embedding_max_windows: int = Field(ge=1)
     embedding_batch_tracks: int = Field(ge=1)
     embedding_loaders: int = Field(ge=1)
+    # Text search
+    search_prompt_templates: list[str] = Field(min_length=1)
     # Index
     index_keep_versions: int = Field(ge=2)
     # Recommendation
@@ -92,6 +94,14 @@ class Settings(BaseModel):
     api_port: int
     api_tracks_page_size: int = Field(ge=1)
     api_tracks_page_max: int = Field(ge=1)
+
+    @field_validator("search_prompt_templates")
+    @classmethod
+    def _templates_have_placeholder(cls, templates: list[str]) -> list[str]:
+        bad = [t for t in templates if t.count("{}") != 1]
+        if bad:
+            raise ValueError(f"each prompt template needs exactly one {{}}: {bad}")
+        return templates
 
     @property
     def feature_source_id(self) -> str:
@@ -162,6 +172,7 @@ def _build_settings(raw: dict) -> Settings:
         embedding_max_windows=raw["features"]["embedding_max_windows"],
         embedding_batch_tracks=raw["features"]["embedding_batch_tracks"],
         embedding_loaders=raw["features"]["embedding_loaders"],
+        search_prompt_templates=raw["search"]["prompt_templates"],
         index_keep_versions=raw["index"]["keep_versions"],
         default_rec_limit=raw["recommendation"]["default_limit"],
         candidate_multiplier=raw["recommendation"]["candidate_multiplier"],

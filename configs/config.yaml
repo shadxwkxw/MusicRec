@@ -28,6 +28,12 @@ features:
   embedding_batch_tracks: 32
   embedding_loaders: 8             # потоков декодирования аудио
 
+search:
+  # GET /search: текст переводится текстовой частью CLAP (features.embedding_model)
+  # в эмбеддинг и ищется в индексе. Запрос подставляется в шаблоны и эмбеддинги
+  # усредняются: CLAP чувствительна к формулировке. Запросы — на английском.
+  prompt_templates: ["{} music", "a {} song", "this is {} music"]
+
 index:
   # Каждая сборка индекса — отдельная неизменяемая версия в paths.index_dir/versions,
   # текущая указана в CURRENT. Хранятся последние keep_versions

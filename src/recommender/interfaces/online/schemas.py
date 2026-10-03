@@ -32,7 +32,13 @@ class RecommendationItem(BaseModel):
     track_id: str
     title: str
     artist: str
+    genre: str | None = None
     score: float
+
+
+class SearchResponse(BaseModel):
+    query: str
+    results: list[RecommendationItem]
 
 
 class RecommendationResponse(BaseModel):

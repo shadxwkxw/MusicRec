@@ -56,6 +56,8 @@ services:
     build:
       context: .
       dockerfile: services/online/Dockerfile
+      args:
+        EXTRAS: ${ONLINE_EXTRAS:-}  # embeddings — с torch для GET /search
     container_name: recommender-online
     depends_on:
       postgres:
@@ -67,6 +69,7 @@ services:
       - ./src:/app/src
       - ./services:/app/services
       - ./configs:/app/configs
+      - recommender-hf-cache:/root/.cache/huggingface  # веса текстовой модели для /search
     environment:
       <<: *app-env
       PYTHONUNBUFFERED: "1"
