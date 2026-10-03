@@ -241,3 +241,16 @@ def test_index_saved_before_source_tracking_counts_as_librosa(tmp_path):
     dump(meta, tmp_path / "meta.joblib")
 
     assert FaissRecommender.load(tmp_path).source == "librosa"
+
+
+async def test_count_missing_embeddings(api):
+    from recommender.application.batch_embed import count_missing_embeddings
+
+    for i in range(3):
+        await api.upload(i)
+    async with api.sessions() as db:
+        assert await count_missing_embeddings(db, FakeEmbedder.model_name) == 3
+    await _embed(api)
+    async with api.sessions() as db:
+        assert await count_missing_embeddings(db, FakeEmbedder.model_name) == 0
+        assert await count_missing_embeddings(db, "other/model") == 3

@@ -5,6 +5,35 @@ x-app-env: &app-env
   DB_URL: postgresql+asyncpg://${POSTGRES_USER:-recommender}:${POSTGRES_PASSWORD:-recommender}@postgres:5432/${POSTGRES_DB:-recommender}
   FEATURE_SOURCE: ${FEATURE_SOURCE:-librosa}
 
+x-airflow-env: &airflow-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:-airflow}@airflow-postgres/airflow
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+  AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-change-me-jwt-secret}
+  AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+  # Для DAG'ов рекомендера (airflow/dags/recommender.py)
+  RECOMMENDER_HOST_DIR: ${PWD}
+  RECOMMENDER_BATCH_IMAGE: music-recommender-batch:latest
+  RECOMMENDER_NETWORK: recommender-net
+  RECOMMENDER_API_URL: http://recommender-online:8000
+  RECOMMENDER_DOCKER_URL: tcp://docker-proxy:2375
+  DB_URL: postgresql+asyncpg://${POSTGRES_USER:-recommender}:${POSTGRES_PASSWORD:-recommender}@postgres:5432/${POSTGRES_DB:-recommender}
+  FEATURE_SOURCE: ${FEATURE_SOURCE:-librosa}
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:${AIRFLOW_VERSION:-3.3.2}
+  profiles: ["airflow"]
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment:
+    <<: *airflow-env
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+
 services:
   postgres:
     image: postgres:17
@@ -14,7 +43,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-recommender}
       POSTGRES_DB: ${POSTGRES_DB:-recommender}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"  # порт на хосте; внутри сети всегда 5432
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -49,6 +78,10 @@ services:
     build:
       context: .
       dockerfile: services/batch/Dockerfile
+      args:
+        EXTRAS: ${BATCH_EXTRAS:-}  # embeddings — с torch для batch embed
+    # Этот образ запускают и задачи Airflow (DockerOperator)
+    image: music-recommender-batch:latest
     container_name: recommender-batch
     profiles: ["batch"]
     depends_on:
@@ -68,5 +101,91 @@ services:
     # docker compose --profile batch run --rm recommender-batch extract --input-dir /app/data/audio
     # docker compose --profile batch run --rm recommender-batch recommend --output /app/artifacts/recs.parquet
 
+  # ── Airflow (профиль airflow): DAG'и в airflow/dags запускают batch-образ ──
+  airflow-postgres:
+    image: postgres:17
+    container_name: recommender-airflow-postgres
+    profiles: ["airflow"]
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # Docker API для DockerOperator: только контейнеры и образы, без доступа к сокету целиком
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:${DOCKER_PROXY_VERSION:-v0.4.2}
+    container_name: recommender-docker-proxy
+    profiles: ["airflow"]
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: recommender-airflow-init
+    command: ["version"]  # entrypoint образа мигрирует базу и создаёт пользователя по переменным ниже
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USER:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD:-airflow}
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+
+  airflow-apiserver:
+    <<: *airflow-common
+    container_name: recommender-airflow-apiserver
+    command: api-server
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: recommender-airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-apiserver:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_started
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: recommender-airflow-dag-processor
+    command: dag-processor
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+networks:
+  default:
+    name: recommender-net  # к ней подключаются batch-контейнеры из DAG'ов
+
 volumes:
   postgres-data:
+  airflow-postgres-data:
+  recommender-hf-cache:
+    name: recommender-hf-cache  # на него ссылаются задачи Airflow

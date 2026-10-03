@@ -36,3 +36,6 @@ models/
 
 music
 newmusic
+
+# Airflow
+airflow/logs/

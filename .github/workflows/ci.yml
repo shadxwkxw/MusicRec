@@ -26,8 +26,8 @@ jobs:
       - name: Ruff (version from uv.lock)
         run: |
           RUFF=$(uv export --locked --extra dev --no-hashes --no-emit-project | grep -o '^ruff==[^ ;]*')
-          uvx --from "$RUFF" ruff check src services tests scripts --output-format github
-          uvx --from "$RUFF" ruff format --check src services tests scripts
+          uvx --from "$RUFF" ruff check src services tests scripts airflow --output-format github
+          uvx --from "$RUFF" ruff format --check src services tests scripts airflow
 
   typecheck:
     name: Typecheck (mypy)
@@ -139,6 +139,14 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
       - run: make install
       - run: make smoke
+
+  airflow-dags:
+    name: Airflow DAGs import
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: DAGs import in the Airflow image without errors
+        run: make airflow-check
 
   # ── Упаковка ───────────────────────────────────────────────────
   build:

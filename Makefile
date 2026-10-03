@@ -3,7 +3,8 @@
         docker-build docker-up docker-down docker-logs \
         batch-extract batch-embed batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
         docker-batch-extract docker-batch-embed docker-batch-rebuild docker-batch-tune docker-batch-recommend \
-        migrate migration db-copy fma-unpack fma-import
+        migrate migration db-copy fma-unpack fma-import \
+        airflow-up airflow-down airflow-logs airflow-check
 
 # .env (если есть) — те же переменные, что читает приложение; см. .env.example
 -include .env
@@ -54,9 +55,11 @@ COPY_FROM ?= sqlite+aiosqlite:///data/recommender.db
 POSTGRES_USER     ?= recommender
 POSTGRES_PASSWORD ?= recommender
 POSTGRES_DB       ?= recommender
-COPY_TO   ?= postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:5432/$(POSTGRES_DB)
+POSTGRES_HOST_PORT ?= 5432
+COPY_TO   ?= postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:$(POSTGRES_HOST_PORT)/$(POSTGRES_DB)
+# @ — не печатать команду: в адресах базы пароль из .env
 db-copy:
-	$(PY) scripts/copy_db.py --source "$(COPY_FROM)" --target "$(COPY_TO)"
+	@$(PY) scripts/copy_db.py --source "$(COPY_FROM)" --target "$(COPY_TO)"
 
 test:
 	$(VENV)/bin/pytest tests/ -v
@@ -86,12 +89,12 @@ build:
 	$(PY) -m build --wheel
 
 lint:
-	$(VENV)/bin/ruff check src services tests scripts
-	$(VENV)/bin/ruff format --check src services tests scripts
+	$(VENV)/bin/ruff check src services tests scripts airflow
+	$(VENV)/bin/ruff format --check src services tests scripts airflow
 
 format:
-	$(VENV)/bin/ruff format src services tests scripts
-	$(VENV)/bin/ruff check --fix src services tests scripts
+	$(VENV)/bin/ruff format src services tests scripts airflow
+	$(VENV)/bin/ruff check --fix src services tests scripts airflow
 
 typecheck:
 	$(VENV)/bin/mypy src
@@ -170,6 +173,29 @@ docker-batch-tune:
 docker-batch-recommend:
 	docker compose --profile batch run --rm recommender-batch \
 		recommend --output /app/$(OUTPUT) --top-n $(TOP_N)
+
+# ── Airflow (профиль airflow в docker-compose) ───────────────────
+# UI на http://localhost:8080 (логин и пароль — AIRFLOW_USER / AIRFLOW_PASSWORD из .env).
+# DAG'и запускают образ music-recommender-batch, поэтому он собирается заранее;
+# после правок кода batch его нужно пересобрать (make docker-build).
+airflow-up:
+	mkdir -p data/inbox artifacts airflow/logs
+	docker compose --profile batch build recommender-batch
+	docker compose --profile airflow up -d
+
+airflow-down:
+	docker compose --profile airflow down
+
+airflow-logs:
+	docker compose --profile airflow logs -f airflow-scheduler airflow-dag-processor
+
+# Импортируются ли DAG'и без ошибок — в чистом образе Airflow, без запущенного стека
+AIRFLOW_VERSION ?= 3.3.2
+airflow-check:
+	docker run --rm -e AIRFLOW__CORE__LOAD_EXAMPLES=false \
+		-v "$(CURDIR)/airflow/dags:/opt/airflow/dags:ro" \
+		-v "$(CURDIR)/scripts/check_dags.py:/check_dags.py:ro" \
+		apache/airflow:$(AIRFLOW_VERSION) python /check_dags.py recommender_daily recommender_weekly_tuning
 
 # ── Cleanup ──────────────────────────────────────────────────────
 clean:

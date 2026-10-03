@@ -46,6 +46,17 @@ embeddings = [
     "transformers>=4.40",
 ]
 
+# На Linux (Docker, CI) — CPU-сборка torch: с PyPI там ставится сборка с CUDA и
+# библиотеками NVIDIA (~10 ГБ образа), а GPU в контейнере всё равно нет.
+# На macOS — обычная сборка с PyPI (ускорение через MPS).
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

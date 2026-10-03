@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from recommender.application.batch_extract import BatchExtractResult
@@ -23,6 +23,13 @@ class Embedder(Protocol):
     def embed_files(
         self, paths: Sequence[str | Path]
     ) -> Iterator[tuple[int, np.ndarray | str]]: ...
+
+
+async def count_missing_embeddings(db: AsyncSession, model_name: str) -> int:
+    """Сколько треков ещё без эмбеддинга модели — чтобы не грузить модель зря."""
+    done = select(TrackEmbeddingORM.track_id).where(TrackEmbeddingORM.model == model_name)
+    query = select(func.count()).select_from(TrackORM).where(TrackORM.id.not_in(done))
+    return int(await db.scalar(query) or 0)
 
 
 async def run_batch_embed(

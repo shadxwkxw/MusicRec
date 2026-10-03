@@ -25,7 +25,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from recommender.application.batch_embed import run_batch_embed
+from recommender.application.batch_embed import count_missing_embeddings, run_batch_embed
 from recommender.application.batch_extract import (
     BatchExtractResult,
     run_batch_extract,
@@ -86,6 +86,13 @@ def _print_import_stats(title: str, stats: BatchExtractResult) -> None:
 
 
 async def _embed(args: argparse.Namespace) -> None:
+    await init_db()
+    async with async_session() as session:
+        missing = await count_missing_embeddings(session, settings.embedding_model)
+    if not missing:
+        print(f"Embed: all tracks already have {settings.embedding_model} embeddings")
+        return
+
     try:
         from recommender.infrastructure.data_processing.embeddings import ClapEmbedder
 
@@ -101,13 +108,12 @@ async def _embed(args: argparse.Namespace) -> None:
         raise SystemExit(
             f"Embeddings need torch and transformers: make install-embeddings ({e})"
         ) from e
-    print(f"Embedding with {embedder.model_name} on {embedder.device}")
+    print(f"Embedding {missing} tracks with {embedder.model_name} on {embedder.device}")
 
     def progress(done: int, total: int) -> None:
         if done % 500 == 0 or done == total:
             print(f"  {done}/{total}", flush=True)
 
-    await init_db()
     async with async_session() as session:
         stats = await run_batch_embed(session, embedder, progress=progress)
     _print_import_stats("Embed", stats)

@@ -239,6 +239,43 @@ make batch-recommend OUTPUT=artifacts/recs.parquet TOP_N=10
 неудавшийся запуск тюнинга помечается `failed` в `/automl/status`: это
 удобно для планировщика вроде Airflow.
 
+## Airflow
+
+Расписание batch-шагов — два DAG'а в [`airflow/dags/recommender.py`](airflow/dags/recommender.py).
+Каждая задача — одна команда batch CLI в отдельном контейнере образа
+`music-recommender-batch` (`DockerOperator`), так что логика остаётся в CLI, а
+зависимости Airflow и проекта не смешиваются.
+
+| DAG | Когда | Шаги |
+|---|---|---|
+| `recommender_daily` | каждый день в 03:00 UTC | `extract` из `data/inbox` → `embed` (только при `FEATURE_SOURCE=embedding`) → `rebuild` → `/index/reload` → `recommend --use-likes` в `artifacts/recs_<дата>.parquet` |
+| `recommender_weekly_tuning` | по воскресеньям в 04:00 UTC | `tune` → `/index/reload` → `evaluate` |
+
+```bash
+make airflow-up      # собирает batch-образ, поднимает Postgres, online-сервис и Airflow
+make airflow-check   # DAG'и импортируются без ошибок (в чистом образе Airflow)
+make airflow-logs
+make airflow-down
+```
+
+- UI — http://localhost:8080, логин и пароль — `AIRFLOW_USER` / `AIRFLOW_PASSWORD`
+  из `.env` (по умолчанию `airflow` / `airflow`). Новые DAG'и создаются на
+  паузе. Если снять DAG с паузы, Airflow сразу запустит прогон за последний
+  интервал.
+- Компоненты: своя база метаданных, api-server, scheduler (`LocalExecutor`) и
+  dag-processor. Docker API задачам даёт `docker-socket-proxy` (только
+  контейнеры и образы), а не прямой доступ к `docker.sock`.
+- Batch-контейнеры подключаются к сети `recommender-net` (Postgres и
+  online-сервис) и монтируют `data/`, `artifacts/`, `configs/` проекта. Веса
+  моделей для `embed` кешируются в volume `recommender-hf-cache`.
+- Код batch запечён в образ: после правок пересобери его
+  (`docker compose --profile batch build recommender-batch`). В режиме
+  `embedding` нужен `BATCH_EXTRAS=embeddings` в `.env`, чтобы в образе был
+  `torch` (CPU-сборка, образ ~3.5 ГБ).
+- Стек в Docker работает с Postgres, а локальная разработка по умолчанию с
+  SQLite: перед первым запуском перенеси данные `make db-copy`. Если порт
+  5432 занят локальным Postgres, задай `POSTGRES_HOST_PORT` в `.env`.
+
 ## Датасет FMA
 
 Для оценки на большом каталоге с метками используется
@@ -368,6 +405,7 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) на pus
 | integration | все тесты + покрытие (отчёт в summary и артефактах) |
 | postgres | интеграционные тесты на Postgres 17 и `alembic check`: модели совпадают с миграциями |
 | smoke | `make smoke` |
+| airflow-dags | DAG'и импортируются в образе Airflow (`make airflow-check`) |
 | build | wheel ставится в чистое окружение и запускается вне репозитория |
 | docker | сборка образов online и batch после прохождения тестов |
 
@@ -405,6 +443,8 @@ services/
 configs/config.yaml        основной конфиг
 scripts/smoke_test.py      end-to-end проверка
 scripts/copy_db.py         перенос данных между базами
+scripts/check_dags.py      проверка импорта DAG'ов в образе Airflow
+airflow/dags/              DAG'и Airflow (ежедневный конвейер и еженедельный тюнинг)
 alembic.ini                конфиг CLI Alembic
 tests/unit/                юнит-тесты
 tests/integration/         тесты API на временной SQLite
