@@ -14,6 +14,9 @@ x-app-env: &app-env
   S3_REGION: ${S3_REGION:-us-east-1}
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  API_KEY: ${API_KEY:-}
+  API_PROTECT_READS: ${API_PROTECT_READS:-false}
+  CORS_ORIGINS: ${CORS_ORIGINS:-}
 
 x-airflow-env: &airflow-env
   AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -43,6 +46,7 @@ x-airflow-env: &airflow-env
   S3_REGION: ${S3_REGION:-us-east-1}
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  API_KEY: ${API_KEY:-}
 
 x-airflow-common: &airflow-common
   image: apache/airflow:${AIRFLOW_VERSION:-3.3.2}

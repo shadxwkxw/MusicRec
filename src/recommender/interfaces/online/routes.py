@@ -2,11 +2,11 @@
 
 import json
 import logging
-import shutil
 import tempfile
 import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import IO
 
 import librosa
 from fastapi import (
@@ -81,9 +81,12 @@ from recommender.interfaces.online.schemas import (
     TrackResponse,
     TrackUpdate,
 )
+from recommender.interfaces.online.security import require_api_key, require_read_access
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+# Чтение — по ключу, только если api.protect_reads; изменения — всегда по ключу
+reads = APIRouter(dependencies=[Depends(require_read_access)])
+writes = APIRouter(dependencies=[Depends(require_api_key)])
 
 
 def _engine(request: Request) -> FaissRecommender:
@@ -116,7 +119,18 @@ def _update_index(request: Request, change: Callable[[IndexArtifacts], bool]) ->
 # ──────────────────────────────────────────
 
 
-@router.post("/tracks/upload", response_model=TrackResponse)
+def _copy_limited(source: IO[bytes], target: IO[bytes], max_bytes: int) -> int | None:
+    """Скопировать не больше max_bytes; None, если источник больше."""
+    copied = 0
+    while chunk := source.read(1024 * 1024):
+        copied += len(chunk)
+        if copied > max_bytes:
+            return None
+        target.write(chunk)
+    return copied
+
+
+@writes.post("/tracks/upload", response_model=TrackResponse)
 async def upload_track(
     request: Request,
     file: UploadFile = File(...),
@@ -130,9 +144,15 @@ async def upload_track(
     # Только имя файла от клиента, без каталогов
     filename = f"{track_id}_{Path(file.filename or 'audio').name}"
 
+    max_bytes = int(settings.api_max_upload_mb * 1024 * 1024)
+    if file.size is not None and file.size > max_bytes:
+        raise HTTPException(413, f"File is larger than {settings.api_max_upload_mb:g} MB")
     with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=False) as tmp:
-        shutil.copyfileobj(file.file, tmp)
+        copied = _copy_limited(file.file, tmp, max_bytes)
     local_file = Path(tmp.name)
+    if copied is None:
+        local_file.unlink(missing_ok=True)
+        raise HTTPException(413, f"File is larger than {settings.api_max_upload_mb:g} MB")
 
     try:
         features = extract_features(local_file)
@@ -198,7 +218,7 @@ def _to_response(track: TrackORM, indexed_ids: set[str]) -> TrackResponse:
     )
 
 
-@router.get("/tracks", response_model=list[TrackResponse])
+@reads.get("/tracks", response_model=list[TrackResponse])
 async def get_all_tracks(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -213,7 +233,7 @@ async def get_all_tracks(
     return [_to_response(t, indexed_ids) for t in tracks]
 
 
-@router.patch("/tracks/{track_id}", response_model=TrackResponse)
+@writes.patch("/tracks/{track_id}", response_model=TrackResponse)
 async def update_track(
     request: Request,
     track_id: str,
@@ -232,7 +252,7 @@ async def update_track(
     return _to_response(track, set(_engine(request).track_ids))
 
 
-@router.delete("/tracks/{track_id}", status_code=204)
+@writes.delete("/tracks/{track_id}", status_code=204)
 async def delete_track(request: Request, track_id: str, db: AsyncSession = Depends(get_db)):
     """Удалить трек вместе с лайками, эмбеддингами, аудиофайлом и записью в индексе."""
     track = await db.get(TrackORM, track_id)
@@ -254,7 +274,7 @@ async def delete_track(request: Request, track_id: str, db: AsyncSession = Depen
     _update_index(request, lambda artifacts: bool(artifacts.engine.remove_tracks({track_id})))
 
 
-@router.get("/tracks/{track_id}/features", response_model=TrackFeaturesResponse)
+@reads.get("/tracks/{track_id}/features", response_model=TrackFeaturesResponse)
 async def get_track_features(track_id: str, db: AsyncSession = Depends(get_db)):
     from recommender.infrastructure.data_processing.extract import bytes_to_features
 
@@ -315,7 +335,7 @@ def _text_encoder(request: Request) -> TextEncoder:
     return state.text_encoder
 
 
-@router.get("/search", response_model=SearchResponse)
+@reads.get("/search", response_model=SearchResponse)
 async def search(
     request: Request,
     q: str = Query(min_length=1, max_length=500, description="Описание на английском"),
@@ -332,11 +352,11 @@ async def search(
     return SearchResponse(query=q, results=await _enrich(db, recs))
 
 
-@router.get("/recommendations/{track_id}", response_model=RecommendationResponse)
+@reads.get("/recommendations/{track_id}", response_model=RecommendationResponse)
 async def get_recommendations(
     request: Request,
     track_id: str,
-    limit: int = settings.default_rec_limit,
+    limit: int = Query(settings.default_rec_limit, ge=1, le=settings.api_max_rec_limit),
     use_likes: bool = True,
     db: AsyncSession = Depends(get_db),
 ):
@@ -363,11 +383,11 @@ async def get_recommendations(
     )
 
 
-@router.get("/recommendations/user/{user_id}", response_model=RecommendationResponse)
+@reads.get("/recommendations/user/{user_id}", response_model=RecommendationResponse)
 async def get_user_recommendations(
     request: Request,
     user_id: str,
-    limit: int = settings.default_rec_limit,
+    limit: int = Query(settings.default_rec_limit, ge=1, le=settings.api_max_rec_limit),
     use_likes: bool = True,
     db: AsyncSession = Depends(get_db),
 ):
@@ -400,7 +420,7 @@ def _like_query(user_id: str, track_id: str):
     return select(LikeORM).where(LikeORM.user_id == user_id, LikeORM.track_id == track_id)
 
 
-@router.post("/likes", response_model=LikeResponse)
+@writes.post("/likes", response_model=LikeResponse)
 async def add_like(data: LikeRequest, db: AsyncSession = Depends(get_db)):
     """Поставить лайк. Повторный лайк того же трека ничего не меняет (status=exists)."""
     track = await db.get(TrackORM, data.track_id)
@@ -421,7 +441,7 @@ async def add_like(data: LikeRequest, db: AsyncSession = Depends(get_db)):
     return LikeResponse(status=status, user_id=data.user_id, track_id=data.track_id)
 
 
-@router.delete("/likes/{user_id}/{track_id}", status_code=204)
+@writes.delete("/likes/{user_id}/{track_id}", status_code=204)
 async def remove_like(user_id: str, track_id: str, db: AsyncSession = Depends(get_db)):
     like = (await db.execute(_like_query(user_id, track_id))).scalar_one_or_none()
     if like is None:
@@ -430,7 +450,7 @@ async def remove_like(user_id: str, track_id: str, db: AsyncSession = Depends(ge
     await db.commit()
 
 
-@router.get("/users/{user_id}/likes", response_model=list[TrackResponse])
+@reads.get("/users/{user_id}/likes", response_model=list[TrackResponse])
 async def get_user_likes(
     request: Request,
     user_id: str,
@@ -457,7 +477,7 @@ async def get_user_likes(
 # ──────────────────────────────────────────
 
 
-@router.post("/automl/train")
+@writes.post("/automl/train")
 async def start_tuning(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -481,7 +501,7 @@ async def start_tuning(
     return {"run_id": run_id, "status": "started"}
 
 
-@router.get("/automl/status", response_model=list[AutoMLStatusResponse])
+@reads.get("/automl/status", response_model=list[AutoMLStatusResponse])
 async def get_tuning_status(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(AutoMLRunORM).order_by(AutoMLRunORM.id.desc()))
     runs: Sequence[AutoMLRunORM] = result.scalars().all()
@@ -505,7 +525,7 @@ async def get_tuning_status(db: AsyncSession = Depends(get_db)):
 # ──────────────────────────────────────────
 
 
-@router.post("/index/rebuild")
+@writes.post("/index/rebuild")
 async def rebuild_index_endpoint(request: Request, db: AsyncSession = Depends(get_db)):
     try:
         result = await rebuild_index(db)
@@ -521,7 +541,7 @@ async def rebuild_index_endpoint(request: Request, db: AsyncSession = Depends(ge
     }
 
 
-@router.post("/index/reload")
+@writes.post("/index/reload")
 async def reload_index(request: Request):
     """Подхватить индекс и нормализатор с диска, например после batch rebuild / tune."""
     try:
@@ -542,3 +562,8 @@ async def reload_index(request: Request):
         "metric": engine.metric,
         "version": engine.version,
     }
+
+
+router = APIRouter()
+router.include_router(reads)
+router.include_router(writes)

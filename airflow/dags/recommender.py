@@ -7,6 +7,7 @@
     RECOMMENDER_BATCH_IMAGE  образ batch-сервиса
     RECOMMENDER_NETWORK      docker-сеть, где доступны postgres и recommender-online
     RECOMMENDER_API_URL      адрес online-сервиса для /index/reload
+    API_KEY                  ключ online-сервиса (заголовок X-API-Key)
     RECOMMENDER_DOCKER_URL   Docker API (через docker-socket-proxy)
     DB_URL, FEATURE_SOURCE   передаются в batch-контейнеры как есть
     AUDIO_STORAGE, S3_*, AWS_* — хранилище аудио, тоже как есть
@@ -96,7 +97,8 @@ def batch(task_id: str, *command: str, **kwargs) -> DockerOperator:
 @task
 def reload_online_index() -> dict:
     """Переключить работающий online-сервис на опубликованную версию индекса."""
-    request = urllib.request.Request(f"{API_URL}/index/reload", method="POST")
+    headers = {"X-API-Key": key} if (key := os.environ.get("API_KEY")) else {}
+    request = urllib.request.Request(f"{API_URL}/index/reload", method="POST", headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             result = json.load(response)

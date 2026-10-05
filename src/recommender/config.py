@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
 ENV_VAR_PATTERN = re.compile(r"^\$\{([^}]+)\}$")
 
@@ -110,6 +110,18 @@ class Settings(BaseModel):
     api_port: int
     api_tracks_page_size: int = Field(ge=1)
     api_tracks_page_max: int = Field(ge=1)
+    api_max_rec_limit: int = Field(ge=1)
+    api_max_upload_mb: float = Field(gt=0)
+    api_key: SecretStr | None
+    api_protect_reads: bool
+    api_cors_origins: list[str]
+
+    @field_validator("api_key")
+    @classmethod
+    def _key_is_long_enough(cls, key: SecretStr | None) -> SecretStr | None:
+        if key is not None and len(key.get_secret_value()) < 16:
+            raise ValueError("API_KEY is too short: use 16+ chars, e.g. `openssl rand -hex 32`")
+        return key
 
     @model_validator(mode="after")
     def _s3_needs_bucket(self) -> "Settings":
@@ -230,6 +242,13 @@ def _build_settings(raw: dict) -> Settings:
         api_port=raw["api"]["port"],
         api_tracks_page_size=raw["api"]["tracks_page_size"],
         api_tracks_page_max=raw["api"]["tracks_page_max"],
+        api_max_rec_limit=raw["api"]["max_rec_limit"],
+        api_max_upload_mb=raw["api"]["max_upload_mb"],
+        api_key=raw["api"]["key"] or None,
+        api_protect_reads=raw["api"]["protect_reads"],
+        api_cors_origins=[
+            o.strip() for o in str(raw["api"]["cors_origins"] or "").split(",") if o.strip()
+        ],
     )
 
 

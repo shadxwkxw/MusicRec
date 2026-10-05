@@ -135,8 +135,9 @@ batch-tune:
 batch-evaluate:
 	$(PY) services/batch/main.py evaluate
 
+# @ — команда не печатается: в ней может быть API_KEY из .env
 index-reload:
-	curl -fsS -X POST $(API_URL)/index/reload
+	@curl -fsS -X POST $(if $(API_KEY),-H "X-API-Key: $(API_KEY)") $(API_URL)/index/reload
 
 batch-recommend:
 	$(PY) services/batch/main.py recommend --output $(OUTPUT) --top-n $(TOP_N)

@@ -92,3 +92,10 @@ api:
   port: 8000
   tracks_page_size: 50       # GET /tracks: limit по умолчанию
   tracks_page_max: 200       # GET /tracks: максимальный limit
+  max_rec_limit: 100         # верхняя граница limit в рекомендациях
+  max_upload_mb: 50          # больший файл — 413
+  # Доступ. Изменяющие запросы (загрузка, удаление, лайки, индекс, тюнинг) требуют
+  # заголовок X-API-Key. Пустой ключ — проверки нет: только для локальной разработки
+  key: ${API_KEY:-}
+  protect_reads: ${API_PROTECT_READS:-false}  # true — ключ нужен и для чтения (рекомендации, поиск)
+  cors_origins: ${CORS_ORIGINS:-}             # через запятую: https://app.example.com
