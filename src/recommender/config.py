@@ -82,6 +82,14 @@ class Settings(BaseModel):
     # Recommendation
     default_rec_limit: int = Field(ge=1)
     candidate_multiplier: int = Field(ge=1)
+    # Персональные рекомендации
+    user_max_likes: int = Field(ge=1)
+    user_max_interests: int = Field(ge=1)
+    user_min_likes_per_interest: int = Field(ge=1)
+    user_merge_similarity: float = Field(ge=-1, le=1)
+    user_mean_share: float = Field(ge=0, le=1)
+    user_max_per_artist: int = Field(ge=0)
+    user_cold_start: bool
     default_metric: Metric
     default_norm_method: NormMethod
     default_boost_weight: float = Field(ge=0)
@@ -197,6 +205,13 @@ def _build_settings(raw: dict) -> Settings:
         index_keep_versions=raw["index"]["keep_versions"],
         default_rec_limit=raw["recommendation"]["default_limit"],
         candidate_multiplier=raw["recommendation"]["candidate_multiplier"],
+        user_max_likes=raw["user_recommendation"]["max_likes"],
+        user_max_interests=raw["user_recommendation"]["max_interests"],
+        user_min_likes_per_interest=raw["user_recommendation"]["min_likes_per_interest"],
+        user_merge_similarity=raw["user_recommendation"]["merge_similarity"],
+        user_mean_share=raw["user_recommendation"]["mean_share"],
+        user_max_per_artist=raw["user_recommendation"]["max_per_artist"],
+        user_cold_start=raw["user_recommendation"]["cold_start"],
         default_metric=raw["recommendation"]["default_metric"],
         default_norm_method=raw["recommendation"]["default_norm_method"],
         default_boost_weight=raw["recommendation"]["default_boost_weight"],

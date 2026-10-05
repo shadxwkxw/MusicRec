@@ -89,3 +89,21 @@ def _config() -> Config:
 
 def test_baseline_revision_exists():
     assert ScriptDirectory.from_config(_config()).get_revision(BASELINE_REVISION) is not None
+
+
+async def test_duplicate_likes_are_merged_by_unique_migration(fresh_db):
+    async with fresh_db.begin() as conn:
+        await conn.run_sync(_alembic, "upgrade", "0004")
+        await conn.execute(
+            text("INSERT INTO tracks (id, title, filename) VALUES ('t1', 'T', 't.mp3')")
+        )
+        for user in ("u1", "u1", "u1", "u2"):
+            await conn.execute(
+                text("INSERT INTO likes (user_id, track_id) VALUES (:u, 't1')"), {"u": user}
+            )
+
+    async with fresh_db.begin() as conn:
+        await conn.run_sync(_alembic, "upgrade", "0005")
+        rows = (await conn.execute(text("SELECT id, user_id FROM likes ORDER BY id"))).all()
+
+    assert [(i, u) for i, u in rows] == [(1, "u1"), (4, "u2")]  # остаётся самый ранний

@@ -2,11 +2,15 @@
 
 Две стратегии:
 - по треку (content-based + collaborative boost)
-- по пользователю (усреднение векторов его лайков + collaborative boost)
+- по пользователю (интересы из последних лайков + collaborative boost,
+  см. user_profile.py; без лайков — популярные треки)
 """
 
+from collections import Counter
+from dataclasses import dataclass
+
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from recommender.application.collaborative import (
@@ -14,6 +18,7 @@ from recommender.application.collaborative import (
     compute_user_like_boost,
 )
 from recommender.application.features import load_vectors
+from recommender.application.user_profile import blend, interest_candidates
 from recommender.config import settings
 from recommender.domain.models import Recommendation
 from recommender.domain.recommender import Recommender
@@ -62,6 +67,12 @@ async def recommend_by_track(
     )
 
 
+@dataclass
+class UserRecommendations:
+    items: list[Recommendation]
+    strategy: str  # interests — по лайкам; popular — холодный старт
+
+
 async def recommend_for_user(
     user_id: str,
     db: AsyncSession,
@@ -69,27 +80,81 @@ async def recommend_for_user(
     normalizer: FeatureNormalizer,
     limit: int = settings.default_rec_limit,
     use_likes: bool = True,
-) -> list[Recommendation]:
-    """Персональные рекомендации: усреднение векторов лайков + коллаборативный бустинг."""
-    result = await db.execute(select(LikeORM.track_id).where(LikeORM.user_id == user_id))
-    liked_ids = [row[0] for row in result.fetchall()]
+) -> UserRecommendations:
+    """Персональные рекомендации по интересам из последних лайков + коллаборативный бустинг.
 
-    if not liked_ids:
-        raise NoLikedTracksError(user_id)
+    Без лайков (или пока у лайкнутых треков нет векторов) — популярные и новые
+    треки, если user_recommendation.cold_start, иначе NoLikedTracksError.
+    """
+    result = await db.execute(
+        select(LikeORM.track_id)
+        .where(LikeORM.user_id == user_id)
+        .order_by(LikeORM.created_at.desc(), LikeORM.id.desc())
+    )
+    all_liked = list(dict.fromkeys(row[0] for row in result.all()))
+    recent = all_liked[: settings.user_max_likes]
 
-    vectors = list((await load_vectors(db, liked_ids)).values())
-    if not vectors:
-        raise NoLikedTracksError(user_id)
+    vectors_by_id = await load_vectors(db, recent)
+    rows = [vectors_by_id[t] for t in recent if t in vectors_by_id]
+    if not rows:
+        if not settings.user_cold_start:
+            raise NoLikedTracksError(user_id)
+        return UserRecommendations(
+            await popular_tracks(db, engine, limit, exclude_ids=set(all_liked)), "popular"
+        )
 
-    avg_features = np.mean(vectors, axis=0)
+    vectors = np.stack(rows)
     if normalizer.is_fitted:
-        avg_features = normalizer.transform(avg_features).flatten()
-
+        vectors = normalizer.transform(vectors)
     like_boost = await compute_user_like_boost(user_id, db) if use_likes else None
 
-    return engine.recommend(
-        avg_features,
-        limit=limit,
-        exclude_ids=set(liked_ids),
-        like_boost=like_boost or None,
+    candidates = interest_candidates(
+        engine, vectors, limit, exclude_ids=set(all_liked), like_boost=like_boost or None
     )
+    artists = await _artists(db, candidates.track_ids | set(recent))
+    liked_artists = {a for t in recent if (a := artists.get(t))}
+    return UserRecommendations(
+        blend(candidates, limit, artists, liked_artists=liked_artists), "interests"
+    )
+
+
+async def _artists(db: AsyncSession, track_ids: set[str]) -> dict[str, str | None]:
+    if not track_ids or not settings.user_max_per_artist:
+        return {}
+    result = await db.execute(
+        select(TrackORM.id, TrackORM.artist).where(TrackORM.id.in_(list(track_ids)))
+    )
+    return {track_id: artist for track_id, artist in result.all()}
+
+
+async def popular_tracks(
+    db: AsyncSession, engine: Recommender, limit: int, exclude_ids: set[str] | None = None
+) -> list[Recommendation]:
+    """Самые лайкаемые треки из индекса, при равенстве — новые. Скор — число лайков."""
+    exclude_ids = exclude_ids or set()
+    indexed = set(engine.track_ids)
+    likes = func.count(LikeORM.id)
+    result = await db.execute(
+        select(TrackORM.id, TrackORM.artist, likes)
+        .outerjoin(LikeORM, LikeORM.track_id == TrackORM.id)
+        .group_by(TrackORM.id, TrackORM.artist)
+        .order_by(likes.desc(), TrackORM.created_at.desc(), TrackORM.id)
+    )
+    picked: list[Recommendation] = []
+    skipped: list[Recommendation] = []  # из-за лимита по артисту — добор, если не хватит
+    per_artist: Counter[str] = Counter()
+    cap = settings.user_max_per_artist
+    for track_id, artist, count in result.all():
+        if track_id not in indexed or track_id in exclude_ids:
+            continue
+        rec = Recommendation(track_id=track_id, score=float(count))
+        if cap and artist and per_artist[artist] >= cap:
+            skipped.append(rec)
+            continue
+        per_artist[artist] += 1
+        picked.append(rec)
+        if len(picked) >= limit:
+            break
+    if len(picked) < limit:
+        picked = sorted(picked + skipped[: limit - len(picked)], key=lambda r: -r.score)
+    return picked

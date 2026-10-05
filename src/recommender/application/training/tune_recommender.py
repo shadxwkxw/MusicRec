@@ -148,7 +148,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
                 "boost_weight", 0.0, settings.tuning_max_boost_weight
             )
             _, normalized, engine = build(params)
-            metrics = evaluate(engine, normalized, id_to_idx, train)
+            metrics = evaluate(engine, normalized, id_to_idx, train, artists=artists)
             trial.set_user_attr("metrics", metrics)
             return objective_score(metrics)
 
@@ -166,7 +166,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     normalizer, normalized, engine = build(best)
     if mode == "genre":
         best["boost_weight"] = (
-            _tune_boost(engine, normalized, id_to_idx, train)
+            _tune_boost(engine, normalized, id_to_idx, train, artists)
             if has_likes
             else settings.default_boost_weight
         )
@@ -205,12 +205,13 @@ def _tune_boost(
     normalized: np.ndarray,
     id_to_idx: dict[str, int],
     train: dict[str, set[str]],
+    artists: dict[str, str],
 ) -> float:
     """Вес буста по leave-one-out на обучающих лайках при готовых параметрах признаков."""
     best_weight, best_score = 0.0, -1.0
     for weight in np.linspace(0.0, settings.tuning_max_boost_weight, 13):
         engine.boost_weight = float(weight)
-        score = objective_score(evaluate(engine, normalized, id_to_idx, train))
+        score = objective_score(evaluate(engine, normalized, id_to_idx, train, artists=artists))
         if score > best_score:  # при равенстве остаётся меньший вес
             best_weight, best_score = float(weight), score
     return best_weight

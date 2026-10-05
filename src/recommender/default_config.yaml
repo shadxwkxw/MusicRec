@@ -60,6 +60,17 @@ recommendation:
   default_norm_method: standard  # standard | minmax | robust
   default_boost_weight: 0.3      # вес co-like буста в долях разрыва «ближайший — типичный трек»
 
+user_recommendation:
+  # Персональные рекомендации (/recommendations/user/{id}): лайки делятся на
+  # интересы, выдача — смесь общего среднего и интересов (application/user_profile.py)
+  max_likes: 100                # профиль строится по последним N лайкам
+  max_interests: 3
+  min_likes_per_interest: 3     # меньшая группа лайков присоединяется к ближайшей
+  merge_similarity: 0.0         # группы с косинусом центров выше порога объединяются
+  mean_share: 0.3               # доля выдачи по общему среднему, если интересов несколько
+  max_per_artist: 2             # не больше N треков одного артиста (0 — без ограничения)
+  cold_start: true              # без лайков — популярные и новые треки вместо 404
+
 tuning:
   n_trials: 50
   timeout: 600               # Optuna timeout, seconds

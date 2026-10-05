@@ -186,7 +186,7 @@ async def test_user_recommendations_exclude_liked(api):
 
     rec_ids = {r["track_id"] for r in resp.json()["recommendations"]}
     assert rec_ids == set(ids[2:])
-    assert (await api.client.get("/recommendations/user/nobody")).status_code == 404
+    assert resp.json()["strategy"] == "interests"
 
 
 async def test_user_like_boost_raises_only_neighbour_liked_track(api):
@@ -398,3 +398,68 @@ async def test_service_changes_land_on_top_of_newer_batch_index(api, audio_files
     assert uploaded["id"] in on_disk.track_ids and ids[0] not in on_disk.track_ids
     assert app.state.engine.version == on_disk.version
     assert set(app.state.engine.track_ids) == set(on_disk.track_ids)
+
+
+# ── Лайки и персональные рекомендации ────────────────────────────
+
+
+async def test_repeated_like_is_stored_once(api):
+    (track_id,) = await api.seed(1)
+
+    first = await api.client.post("/likes", json={"user_id": "u1", "track_id": track_id})
+    again = await api.client.post("/likes", json={"user_id": "u1", "track_id": track_id})
+
+    assert (first.json()["status"], again.json()["status"]) == ("ok", "exists")
+    async with api.sessions() as db:
+        assert await db.scalar(select(func.count()).select_from(LikeORM)) == 1
+
+
+async def test_unlike_and_list_likes(api):
+    ids = await api.seed(3)
+    for track_id in ids:
+        await api.like("u1", track_id)
+
+    listed = (await api.client.get("/users/u1/likes")).json()
+    assert [t["id"] for t in listed] == ids[::-1]  # сначала последние
+
+    assert (await api.client.delete(f"/likes/u1/{ids[1]}")).status_code == 204
+    assert (await api.client.delete(f"/likes/u1/{ids[1]}")).status_code == 404
+    assert [t["id"] for t in (await api.client.get("/users/u1/likes")).json()] == [ids[2], ids[0]]
+    assert (await api.client.get("/users/nobody/likes")).json() == []
+
+
+async def test_new_user_gets_popular_tracks(api):
+    ids = await api.seed(4)
+    for user, liked in {"a": ids[:3], "b": ids[1:3], "c": ids[2:3]}.items():
+        for track_id in liked:
+            await api.like(user, track_id)
+
+    resp = await api.client.get("/recommendations/user/newcomer", params={"limit": 3})
+
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["strategy"] == "popular"
+    assert [r["track_id"] for r in body["recommendations"]] == [ids[2], ids[1], ids[0]]
+    assert [r["score"] for r in body["recommendations"]] == [3.0, 2.0, 1.0]
+
+
+async def test_cold_start_can_be_disabled(api, monkeypatch):
+    await api.seed(2)
+    monkeypatch.setattr(settings, "user_cold_start", False)
+
+    assert (await api.client.get("/recommendations/user/newcomer")).status_code == 404
+
+
+async def test_user_profile_uses_only_recent_likes(api, monkeypatch):
+    ids = await api.seed(6)
+    monkeypatch.setattr(settings, "user_max_likes", 1)
+    await api.like("u1", ids[0])
+    await api.like("u1", ids[5])  # профиль — только последний лайк
+
+    params = {"limit": 10, "use_likes": False}  # больше, чем треков: в выдаче весь каталог
+    recs = (await api.client.get("/recommendations/user/u1", params=params)).json()
+    by_last = (await api.client.get(f"/recommendations/{ids[5]}", params=params)).json()
+
+    rec_ids = [r["track_id"] for r in recs["recommendations"]]
+    assert sorted(rec_ids) == sorted(ids[1:5])  # старый лайк по-прежнему не рекомендуется
+    assert rec_ids == [r["track_id"] for r in by_last["recommendations"] if r["track_id"] != ids[0]]

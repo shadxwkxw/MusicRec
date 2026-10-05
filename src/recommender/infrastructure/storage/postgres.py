@@ -16,6 +16,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     String,
+    UniqueConstraint,
     inspect,
 )
 from sqlalchemy.ext.asyncio import (
@@ -67,6 +68,7 @@ class TrackEmbeddingORM(Base):
 
 class LikeORM(Base):
     __tablename__ = "likes"
+    __table_args__ = (UniqueConstraint("user_id", "track_id", name="uq_likes_user_track"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(String, nullable=False, index=True)

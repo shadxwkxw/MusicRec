@@ -22,6 +22,7 @@ from fastapi import (
 )
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from recommender.application.features import (
@@ -370,9 +371,9 @@ async def get_user_recommendations(
     use_likes: bool = True,
     db: AsyncSession = Depends(get_db),
 ):
-    """Персональные рекомендации по лайкам пользователя."""
+    """Персональные рекомендации по интересам из лайков; без лайков — популярное."""
     try:
-        recs = await recommend_for_user(
+        result = await recommend_for_user(
             user_id,
             db,
             engine=_engine(request),
@@ -385,7 +386,8 @@ async def get_user_recommendations(
 
     return RecommendationResponse(
         source_track_id=f"user:{user_id}",
-        recommendations=await _enrich(db, recs),
+        recommendations=await _enrich(db, result.items),
+        strategy=result.strategy,
     )
 
 
@@ -394,17 +396,60 @@ async def get_user_recommendations(
 # ──────────────────────────────────────────
 
 
+def _like_query(user_id: str, track_id: str):
+    return select(LikeORM).where(LikeORM.user_id == user_id, LikeORM.track_id == track_id)
+
+
 @router.post("/likes", response_model=LikeResponse)
 async def add_like(data: LikeRequest, db: AsyncSession = Depends(get_db)):
+    """Поставить лайк. Повторный лайк того же трека ничего не меняет (status=exists)."""
     track = await db.get(TrackORM, data.track_id)
     if not track:
         raise HTTPException(404, "Track not found")
 
-    like = LikeORM(user_id=data.user_id, track_id=data.track_id)
-    db.add(like)
+    status = "ok"
+    if (await db.execute(_like_query(data.user_id, data.track_id))).first():
+        status = "exists"
+    else:
+        db.add(LikeORM(user_id=data.user_id, track_id=data.track_id))
+        try:
+            await db.commit()
+        except IntegrityError:  # тот же лайк пришёл параллельным запросом
+            await db.rollback()
+            status = "exists"
+
+    return LikeResponse(status=status, user_id=data.user_id, track_id=data.track_id)
+
+
+@router.delete("/likes/{user_id}/{track_id}", status_code=204)
+async def remove_like(user_id: str, track_id: str, db: AsyncSession = Depends(get_db)):
+    like = (await db.execute(_like_query(user_id, track_id))).scalar_one_or_none()
+    if like is None:
+        raise HTTPException(404, "Like not found")
+    await db.delete(like)
     await db.commit()
 
-    return LikeResponse(status="ok", user_id=data.user_id, track_id=data.track_id)
+
+@router.get("/users/{user_id}/likes", response_model=list[TrackResponse])
+async def get_user_likes(
+    request: Request,
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(settings.api_tracks_page_size, ge=1, le=settings.api_tracks_page_max),
+    offset: int = Query(0, ge=0),
+):
+    """Лайкнутые треки пользователя, сначала последние."""
+    result = await db.execute(
+        select(TrackORM)
+        .join(LikeORM, LikeORM.track_id == TrackORM.id)
+        .where(LikeORM.user_id == user_id)
+        .order_by(LikeORM.created_at.desc(), LikeORM.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    tracks: Sequence[TrackORM] = result.scalars().all()
+    indexed_ids = set(_engine(request).track_ids)
+    return [_to_response(t, indexed_ids) for t in tracks]
 
 
 # ──────────────────────────────────────────

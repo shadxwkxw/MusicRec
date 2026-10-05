@@ -14,6 +14,8 @@ from recommender.domain.models import Recommendation
 class Recommender(ABC):
     """Поиск похожих треков по вектору признаков."""
 
+    track_ids: list[str]  # треки в индексе, в порядке строк
+
     @abstractmethod
     def add_tracks(self, track_ids: list[str], features: np.ndarray) -> None:
         """Добавить треки в индекс.

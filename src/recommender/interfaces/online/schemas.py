@@ -44,6 +44,8 @@ class SearchResponse(BaseModel):
 class RecommendationResponse(BaseModel):
     source_track_id: str
     recommendations: list[RecommendationItem]
+    strategy: str | None = None
+    """Для пользователя: interests — по его лайкам, popular — лайков пока нет."""
 
 
 class LikeRequest(BaseModel):
@@ -52,7 +54,7 @@ class LikeRequest(BaseModel):
 
 
 class LikeResponse(BaseModel):
-    status: str
+    status: str  # ok — лайк добавлен, exists — уже был
     user_id: str
     track_id: str
 

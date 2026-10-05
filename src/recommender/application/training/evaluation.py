@@ -2,7 +2,8 @@
 
 Запрос — это «спрятанный» лайк (target) и то, что система о пользователе знает:
 - путь track: рекомендации от одного известного лайка (как /recommendations/{id});
-- путь user: рекомендации по всем известным лайкам (как /recommendations/user/{id}).
+- путь user: рекомендации по интересам из всех известных лайков
+  (как /recommendations/user/{id}, с тем же лимитом треков на артиста).
 Для каждого пути считаются hit@k и MRR@k.
 
 Два протокола:
@@ -28,6 +29,7 @@ from recommender.application.collaborative import (
     user_co_like_strength,
 )
 from recommender.application.features import check_index_source, load_vectors
+from recommender.application.user_profile import blend, interest_candidates
 from recommender.config import settings
 from recommender.infrastructure.storage.artifacts import load_current
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
@@ -125,23 +127,31 @@ def system_ranker(
     normalized: np.ndarray,
     id_to_idx: dict[str, int],
     use_boost: bool = True,
+    artists: Mapping[str, str] | None = None,
 ) -> Ranker:
     """Наша система: те же запросы, что делают API-эндпоинты."""
 
     def rank(query: Query, k: int) -> list[str]:
-        if query.path == "track":
-            (query_id,) = query.query_ids
-            vector = normalized[id_to_idx[query_id]]
-            boost = co_like_strength(query_id, dict(query.visible_likes)) if use_boost else {}
-        else:
-            vector = normalized[[id_to_idx[t] for t in query.query_ids]].mean(axis=0)
+        if query.path == "user":
             boost = (
                 user_co_like_strength(set(query.query_ids), dict(query.visible_likes))
                 if use_boost
                 else {}
             )
+            vectors = normalized[[id_to_idx[t] for t in query.query_ids]]
+            candidates = interest_candidates(
+                engine, vectors, k, exclude_ids=set(query.exclude), like_boost=boost or None
+            )
+            liked_artists = {a for t in query.query_ids if (a := (artists or {}).get(t))}
+            return [r.track_id for r in blend(candidates, k, artists, liked_artists=liked_artists)]
+
+        (query_id,) = query.query_ids
+        boost = co_like_strength(query_id, dict(query.visible_likes)) if use_boost else {}
         recs = engine.recommend(
-            vector, limit=k, exclude_ids=set(query.exclude), like_boost=boost or None
+            normalized[id_to_idx[query_id]],
+            limit=k,
+            exclude_ids=set(query.exclude),
+            like_boost=boost or None,
         )
         return [r.track_id for r in recs]
 
@@ -211,11 +221,12 @@ def evaluate(
     id_to_idx: dict[str, int],
     user_likes: UserLikes,
     k: int | None = None,
+    artists: Mapping[str, str] | None = None,
 ) -> dict[str, float]:
     """Leave-one-out оценка системы — целевая функция тюнинга."""
     k = k or settings.tuning_eval_k
     queries = leave_one_out_queries(user_likes, set(id_to_idx))
-    return score(queries, system_ranker(engine, normalized, id_to_idx), k)
+    return score(queries, system_ranker(engine, normalized, id_to_idx, artists=artists), k)
 
 
 def objective_score(metrics: dict[str, float]) -> float:
@@ -240,9 +251,11 @@ def holdout_report(
     if not queries:
         return {}
     return {
-        "system": score(queries, system_ranker(engine, normalized, id_to_idx), k),
+        "system": score(queries, system_ranker(engine, normalized, id_to_idx, artists=artists), k),
         "content_only": score(
-            queries, system_ranker(engine, normalized, id_to_idx, use_boost=False), k
+            queries,
+            system_ranker(engine, normalized, id_to_idx, use_boost=False, artists=artists),
+            k,
         ),
         "same_artist": score(queries, same_artist_ranker(track_ids, artists, train), k),
         "popularity": score(queries, popularity_ranker(track_ids, train), k),
