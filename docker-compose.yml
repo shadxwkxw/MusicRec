@@ -4,6 +4,16 @@
 x-app-env: &app-env
   DB_URL: postgresql+asyncpg://${POSTGRES_USER:-recommender}:${POSTGRES_PASSWORD:-recommender}@postgres:5432/${POSTGRES_DB:-recommender}
   FEATURE_SOURCE: ${FEATURE_SOURCE:-librosa}
+  AUDIO_STORAGE: ${AUDIO_STORAGE:-local}
+  S3_BUCKET: ${S3_BUCKET:-}
+  S3_UPLOAD_PREFIX: ${S3_UPLOAD_PREFIX:-uploads/}
+  S3_IMPORT_PREFIX: ${S3_IMPORT_PREFIX:-}
+  S3_INDEX_PREFIX: ${S3_INDEX_PREFIX:-index/}
+  S3_ARTIFACTS_PREFIX: ${S3_ARTIFACTS_PREFIX:-artifacts/}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
 
 x-airflow-env: &airflow-env
   AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -23,6 +33,16 @@ x-airflow-env: &airflow-env
   RECOMMENDER_DOCKER_URL: tcp://docker-proxy:2375
   DB_URL: postgresql+asyncpg://${POSTGRES_USER:-recommender}:${POSTGRES_PASSWORD:-recommender}@postgres:5432/${POSTGRES_DB:-recommender}
   FEATURE_SOURCE: ${FEATURE_SOURCE:-librosa}
+  AUDIO_STORAGE: ${AUDIO_STORAGE:-local}
+  S3_BUCKET: ${S3_BUCKET:-}
+  S3_UPLOAD_PREFIX: ${S3_UPLOAD_PREFIX:-uploads/}
+  S3_IMPORT_PREFIX: ${S3_IMPORT_PREFIX:-}
+  S3_INDEX_PREFIX: ${S3_INDEX_PREFIX:-index/}
+  S3_ARTIFACTS_PREFIX: ${S3_ARTIFACTS_PREFIX:-artifacts/}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
 
 x-airflow-common: &airflow-common
   image: apache/airflow:${AIRFLOW_VERSION:-3.3.2}
@@ -63,7 +83,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "${ONLINE_HOST_PORT:-8000}:8000"  # порт на хосте; внутри сети всегда 8000
     volumes:
       - ./data:/app/data
       - ./src:/app/src
@@ -103,6 +123,33 @@ services:
     # Команда передаётся через docker compose run:
     # docker compose --profile batch run --rm recommender-batch extract --input-dir /app/data/audio
     # docker compose --profile batch run --rm recommender-batch recommend --output /app/artifacts/recs.parquet
+
+  # ── Локальное S3-хранилище (профиль s3): RustFS, S3-совместимый сервер с веб-консолью ──
+  # Данные лежат в томе s3-data и переживают перезапуск. Бакет S3_BUCKET создаётся
+  # при старте (папка в корне данных = бакет). В .env: AUDIO_STORAGE=s3, S3_BUCKET=music,
+  # S3_ENDPOINT_URL=http://s3:9000 (с хоста — http://localhost:5050),
+  # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY — они же логин и пароль консоли.
+  # Консоль: http://localhost:9001/rustfs/console/
+  s3:
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.1}
+    container_name: recommender-s3
+    profiles: ["s3"]
+    environment:
+      RUSTFS_ACCESS_KEY: ${AWS_ACCESS_KEY_ID:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_CONSOLE_ENABLE: "true"
+      S3_BUCKET: ${S3_BUCKET:-music}
+    entrypoint: ["sh", "-c", "mkdir -p \"/data/$$S3_BUCKET\" && exec /entrypoint.sh rustfs"]
+    ports:
+      - "${S3_HOST_PORT:-5050}:9000"  # API; 9000 на хосте часто занят
+      - "${S3_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - s3-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   # ── Airflow (профиль airflow): DAG'и в airflow/dags запускают batch-образ ──
   airflow-postgres:
@@ -190,5 +237,6 @@ networks:
 volumes:
   postgres-data:
   airflow-postgres-data:
+  s3-data:
   recommender-hf-cache:
     name: recommender-hf-cache  # на него ссылаются задачи Airflow

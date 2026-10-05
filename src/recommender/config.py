@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ENV_VAR_PATTERN = re.compile(r"^\$\{([^}]+)\}$")
 
@@ -52,6 +52,14 @@ class Settings(BaseModel):
     audio_dir: Path
     index_dir: Path
     models_dir: Path
+    # Audio storage
+    storage_backend: Literal["local", "s3"]
+    s3_bucket: str | None
+    s3_upload_prefix: str
+    s3_index_prefix: str
+    s3_artifacts_prefix: str
+    s3_endpoint_url: str | None
+    s3_region: str
     # Database
     db_url: str
     # Audio feature extraction
@@ -94,6 +102,12 @@ class Settings(BaseModel):
     api_port: int
     api_tracks_page_size: int = Field(ge=1)
     api_tracks_page_max: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _s3_needs_bucket(self) -> "Settings":
+        if self.storage_backend == "s3" and not self.s3_bucket:
+            raise ValueError("storage.backend=s3 needs S3_BUCKET")
+        return self
 
     @field_validator("search_prompt_templates")
     @classmethod
@@ -160,6 +174,13 @@ def _build_settings(raw: dict) -> Settings:
         audio_dir=Path(raw["paths"]["audio_dir"]),
         index_dir=Path(raw["paths"]["index_dir"]),
         models_dir=Path(raw["paths"]["models_dir"]),
+        storage_backend=raw["storage"]["backend"],
+        s3_bucket=raw["storage"]["s3_bucket"] or None,
+        s3_upload_prefix=raw["storage"]["s3_upload_prefix"],
+        s3_index_prefix=raw["storage"]["s3_index_prefix"],
+        s3_artifacts_prefix=raw["storage"]["s3_artifacts_prefix"],
+        s3_endpoint_url=raw["storage"]["s3_endpoint_url"] or None,
+        s3_region=raw["storage"]["s3_region"],
         db_url=raw["database"]["url"],
         sample_rate=raw["audio"]["sample_rate"],
         duration_limit=raw["audio"]["duration_limit"],

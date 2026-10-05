@@ -14,7 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from recommender.application.batch_extract import BatchExtractResult
 from recommender.application.features import audio_path_of
+from recommender.infrastructure.storage.audio_store import local_copies
 from recommender.infrastructure.storage.postgres import TrackEmbeddingORM, TrackORM, utcnow
+
+DOWNLOAD_CHUNK = 64
 
 
 class Embedder(Protocol):
@@ -53,36 +56,40 @@ async def run_batch_embed(
     )
     stats = BatchExtractResult(skipped=len(done_ids & {t.id for t in tracks}))
 
-    todo: list[tuple[str, Path]] = []
-    for track in tracks:
-        if track.id in done_ids:
-            continue
-        path = audio_path_of(track)
-        if path.exists():
-            todo.append((track.id, path))
-        else:
-            stats.failed.append((track.filename, f"audio not found: {path}"))
+    todo = [(t.id, audio_path_of(t)) for t in tracks if t.id not in done_ids]
 
-    pending = 0
-    for done, (i, result) in enumerate(embedder.embed_files([p for _, p in todo]), start=1):
-        track_id = todo[i][0]
-        if isinstance(result, str):
-            stats.failed.append((track_id, result))
-        else:
-            db.add(
-                TrackEmbeddingORM(
-                    track_id=track_id,
-                    model=embedder.model_name,
-                    vector=np.asarray(result, dtype=np.float32).tobytes(),
-                    created_at=utcnow(),
-                )
-            )
-            stats.processed += 1
-            pending += 1
-        if pending >= commit_every:
-            await db.commit()
-            pending = 0
-        if progress:
-            progress(done, len(todo))
+    # Пачками: файлы из S3 скачиваются во временную папку на время пачки
+    pending = done = 0
+    for start in range(0, len(todo), DOWNLOAD_CHUNK):
+        chunk = todo[start : start + DOWNLOAD_CHUNK]
+        with local_copies([location for _, location in chunk]) as copies:
+            ready = []
+            for (track_id, location), copy in zip(chunk, copies, strict=True):
+                if isinstance(copy, Exception):
+                    stats.failed.append((track_id, f"audio not found: {location}"))
+                    done += 1
+                else:
+                    ready.append((track_id, copy))
+            for i, result in embedder.embed_files([path for _, path in ready]):
+                track_id = ready[i][0]
+                done += 1
+                if isinstance(result, str):
+                    stats.failed.append((track_id, result))
+                else:
+                    db.add(
+                        TrackEmbeddingORM(
+                            track_id=track_id,
+                            model=embedder.model_name,
+                            vector=np.asarray(result, dtype=np.float32).tobytes(),
+                            created_at=utcnow(),
+                        )
+                    )
+                    stats.processed += 1
+                    pending += 1
+                if pending >= commit_every:
+                    await db.commit()
+                    pending = 0
+                if progress:
+                    progress(done, len(todo))
     await db.commit()
     return stats

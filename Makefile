@@ -1,7 +1,7 @@
 .PHONY: env install install-embeddings lock upgrade run test test-unit test-integration coverage smoke audit build \
         lint format typecheck clean \
         docker-build docker-up docker-down docker-logs \
-        batch-extract batch-embed batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
+        batch-extract batch-import-s3 batch-migrate-s3 batch-embed batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
         docker-batch-extract docker-batch-embed docker-batch-rebuild docker-batch-tune docker-batch-recommend \
         migrate migration db-copy fma-unpack fma-import \
         airflow-up airflow-down airflow-logs airflow-check
@@ -108,6 +108,17 @@ API_URL   ?= http://localhost:8000
 
 batch-extract:
 	$(PY) services/batch/main.py extract --input-dir $(INPUT_DIR)
+
+# Импорт аудио из S3 (storage.s3_bucket): make batch-import-s3 S3_IMPORT_PREFIX=music/ WORKERS=8
+S3_IMPORT_PREFIX ?=
+batch-import-s3:
+	$(PY) services/batch/main.py import-s3 --prefix "$(S3_IMPORT_PREFIX)" --workers $(WORKERS)
+
+# Перенос в S3 (AUDIO_STORAGE=s3): аудио из data/audio, индекс, artifacts/*.parquet.
+# make batch-migrate-s3 DELETE_LOCAL=1 — удалить локальные копии аудио после переноса
+DELETE_LOCAL ?=
+batch-migrate-s3:
+	$(PY) services/batch/main.py migrate-s3 $(if $(DELETE_LOCAL),--delete-local)
 
 # Эмбеддинги модели features.embedding_model для треков без них (нужен make install-embeddings)
 batch-embed:

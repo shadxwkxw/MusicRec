@@ -3,11 +3,13 @@
 Subcommands:
     extract    — извлечь фичи из директории аудио и записать в БД
     import-fma — импортировать подмножество Free Music Archive с жанрами
+    import-s3  — импортировать аудио из S3 по префиксу (storage.s3_bucket)
     embed      — досчитать эмбеддинги модели features.embedding_model
     rebuild    — пересобрать индекс из всех треков БД (параметры тюнинга сохраняются)
     tune       — подобрать параметры Optuna по лайкам и пересобрать индекс
     evaluate   — оценить текущий индекс на отложенных лайках против бейзлайнов
-    recommend  — precompute top-N похожих для всех треков, выгрузить в файл
+    recommend  — precompute top-N похожих для всех треков, выгрузить в файл или S3
+    migrate-s3 — перенести аудио из папки загрузок, индекс и выгрузки в S3
 
 rebuild и tune пишут индекс на диск; запущенный online-сервис подхватит его
 после POST /index/reload.
@@ -15,10 +17,13 @@ rebuild и tune пишут индекс на диск; запущенный onli
 Examples:
     python services/batch/main.py extract --input-dir /data/audio_inbox
     python services/batch/main.py import-fma --root data/fma --workers 8
+    python services/batch/main.py import-s3 --prefix music/ --workers 8
     python services/batch/main.py rebuild
     python services/batch/main.py tune
     python services/batch/main.py evaluate
     python services/batch/main.py recommend --output artifacts/recs.parquet --top-n 20
+    python services/batch/main.py recommend --output s3://music/artifacts/recs.parquet
+    python services/batch/main.py migrate-s3 --delete-local
 """
 
 import argparse
@@ -30,9 +35,11 @@ from recommender.application.batch_extract import (
     BatchExtractResult,
     run_batch_extract,
     run_batch_import,
+    s3_import_items,
 )
 from recommender.application.batch_recommend import run_batch_recommend
 from recommender.application.index.build_index import NoTracksError, rebuild_index
+from recommender.application.migrate_s3 import migrate_artifacts, migrate_audio, migrate_index
 from recommender.application.training.evaluation import evaluate_saved_index
 from recommender.application.training.tune_recommender import (
     create_tuning_run,
@@ -73,6 +80,26 @@ async def _import_fma(args: argparse.Namespace) -> None:
         stats = await run_batch_import(items, session, workers=args.workers, progress=progress)
     _print_import_stats("FMA import", stats)
     print("Run `rebuild` (and `index-reload` for a running server) to make them searchable")
+
+
+async def _import_s3(args: argparse.Namespace) -> None:
+    items = s3_import_items(args.prefix, args.artist)
+    if args.limit:
+        items = items[: args.limit]
+    print(
+        f"s3://{settings.s3_bucket}/{args.prefix}: {len(items)} audio files, "
+        f"extracting with {args.workers} workers"
+    )
+
+    def progress(done: int, total: int) -> None:
+        if done % 250 == 0 or done == total:
+            print(f"  {done}/{total}", flush=True)
+
+    await init_db()
+    async with async_session() as session:
+        stats = await run_batch_import(items, session, workers=args.workers, progress=progress)
+    _print_import_stats("S3 import", stats)
+    print("Run `embed` (embedding mode) and `rebuild` to make them searchable")
 
 
 def _print_import_stats(title: str, stats: BatchExtractResult) -> None:
@@ -191,12 +218,48 @@ async def _recommend(args: argparse.Namespace) -> None:
     async with async_session() as session:
         result = await run_batch_recommend(
             db=session,
-            output_path=Path(args.output),
+            output_path=args.output,
             top_n=args.top_n,
             use_likes=args.use_likes,
         )
     print(
         f"Batch recommend done: tracks_scored={result.tracks_scored}, output={result.output_path}"
+    )
+
+
+async def _migrate_s3(args: argparse.Namespace) -> None:
+    if settings.storage_backend != "s3":
+        raise SystemExit("Set AUDIO_STORAGE=s3 and S3_BUCKET before migrate-s3")
+
+    def progress(done: int, total: int) -> None:
+        print(f"  audio {done}/{total}", flush=True)
+
+    await init_db()
+    async with async_session() as session:
+        audio = await migrate_audio(
+            session, delete_local=args.delete_local, workers=args.workers, progress=progress
+        )
+    print(
+        f"Audio: moved={audio.moved} to s3://{settings.s3_bucket}/{settings.s3_upload_prefix}, "
+        f"deleted local={audio.deleted_local}, kept outside {settings.audio_dir}="
+        f"{audio.outside_audio_dir}, missing={len(audio.missing)}, failed={len(audio.failed)}"
+    )
+    for path in audio.missing:
+        print(f"  MISSING {path}")
+    for path, err in audio.failed:
+        print(f"  FAIL {path}: {err}")
+
+    version = migrate_index()
+    print(
+        f"Index: s3://{settings.s3_bucket}/{settings.s3_index_prefix} current={version}"
+        if version
+        else "Index: no saved index yet"
+    )
+
+    uploaded = migrate_artifacts(Path(args.artifacts_dir))
+    print(
+        f"Artifacts: {len(uploaded)} files to "
+        f"s3://{settings.s3_bucket}/{settings.s3_artifacts_prefix}"
     )
 
 
@@ -217,6 +280,13 @@ def main() -> None:
     p_fma.add_argument("--limit", type=int, default=0, help="Import only the first N tracks")
     p_fma.set_defaults(func=_import_fma)
 
+    p_s3 = sub.add_parser("import-s3", help="Import audio from S3 under a prefix")
+    p_s3.add_argument("--prefix", default="", help="Key prefix inside storage.s3_bucket")
+    p_s3.add_argument("--artist", default="Unknown", help="Default artist")
+    p_s3.add_argument("--workers", type=int, default=1, help="Parallel extraction processes")
+    p_s3.add_argument("--limit", type=int, default=0, help="Import only the first N files")
+    p_s3.set_defaults(func=_import_s3)
+
     p_embed = sub.add_parser("embed", help="Compute missing embeddings (features.embedding_model)")
     p_embed.set_defaults(func=_embed)
 
@@ -234,12 +304,26 @@ def main() -> None:
     p_recommend = sub.add_parser(
         "recommend", help="Precompute top-N recommendations for all tracks"
     )
-    p_recommend.add_argument("--output", required=True, help="Output path (.csv or .parquet)")
+    p_recommend.add_argument(
+        "--output", required=True, help="Output .csv or .parquet: a path or s3://bucket/key"
+    )
     p_recommend.add_argument("--top-n", type=int, default=settings.default_rec_limit)
     p_recommend.add_argument(
         "--use-likes", action="store_true", help="Apply co-like boost from user likes"
     )
     p_recommend.set_defaults(func=_recommend)
+
+    p_migrate = sub.add_parser(
+        "migrate-s3", help="Move uploaded audio, the index and recommend outputs to S3"
+    )
+    p_migrate.add_argument(
+        "--delete-local", action="store_true", help="Delete local audio after it is in S3"
+    )
+    p_migrate.add_argument("--workers", type=int, default=8, help="Parallel uploads")
+    p_migrate.add_argument(
+        "--artifacts-dir", default="artifacts", help="Folder with recommend outputs"
+    )
+    p_migrate.set_defaults(func=_migrate_s3)
 
     args = parser.parse_args()
     asyncio.run(args.func(args))

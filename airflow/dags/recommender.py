@@ -9,6 +9,7 @@
     RECOMMENDER_API_URL      адрес online-сервиса для /index/reload
     RECOMMENDER_DOCKER_URL   Docker API (через docker-socket-proxy)
     DB_URL, FEATURE_SOURCE   передаются в batch-контейнеры как есть
+    AUDIO_STORAGE, S3_*, AWS_* — хранилище аудио, тоже как есть
 """
 
 import json
@@ -27,11 +28,40 @@ NETWORK = os.getenv("RECOMMENDER_NETWORK", "recommender-net")
 API_URL = os.getenv("RECOMMENDER_API_URL", "http://recommender-online:8000")
 DOCKER_URL = os.getenv("RECOMMENDER_DOCKER_URL", "unix://var/run/docker.sock")
 INBOX = "data/inbox"
+STORAGE_ENV = (
+    "AUDIO_STORAGE",
+    "S3_BUCKET",
+    "S3_UPLOAD_PREFIX",
+    "S3_IMPORT_PREFIX",
+    "S3_INDEX_PREFIX",
+    "S3_ARTIFACTS_PREFIX",
+    "S3_ENDPOINT_URL",
+    "S3_REGION",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+)
 
 DEFAULT_ARGS = {
     "retries": 1,
     "retry_delay": pendulum.duration(minutes=5),
 }
+
+
+def import_command() -> tuple[str, ...]:
+    """Откуда брать новую музыку: префикс в S3 или локальная папка data/inbox."""
+    if os.environ.get("AUDIO_STORAGE") == "s3":
+        return ("import-s3", "--prefix", os.environ.get("S3_IMPORT_PREFIX", ""), "--workers", "4")
+    return ("extract", "--input-dir", INBOX, "--workers", "4")
+
+
+def recs_output() -> str:
+    """Куда выгружать рекомендации: в бакет при S3, иначе в artifacts/ на хосте."""
+    # run_after есть у любого запуска; у ручного в Airflow 3 нет logical_date и {{ ds }}
+    name = "recs_{{ dag_run.run_after | ds }}.parquet"
+    if os.environ.get("AUDIO_STORAGE") == "s3":
+        prefix = os.environ.get("S3_ARTIFACTS_PREFIX") or "artifacts/"
+        return f"s3://{os.environ.get('S3_BUCKET', '')}/{prefix}{name}"
+    return f"artifacts/{name}"
 
 
 def batch(task_id: str, *command: str, **kwargs) -> DockerOperator:
@@ -52,6 +82,8 @@ def batch(task_id: str, *command: str, **kwargs) -> DockerOperator:
         environment={
             "DB_URL": os.environ.get("DB_URL", ""),
             "FEATURE_SOURCE": os.environ.get("FEATURE_SOURCE", "librosa"),
+            # хранилище аудио (local / s3) и доступ к S3 — как у online-сервиса
+            **{name: os.environ.get(name, "") for name in STORAGE_ENV},
             "ENV_FILE": "",  # всё окружение задаётся здесь явно
             "PYTHONUNBUFFERED": "1",
         },
@@ -82,7 +114,7 @@ def choose_feature_step() -> str:
 
 @dag(
     dag_id="recommender_daily",
-    description="Импорт новых треков, признаки, пересборка индекса, batch-рекомендации",
+    description="Импорт новых треков (S3 или data/inbox), признаки, индекс, рекомендации",
     schedule="0 3 * * *",
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
@@ -91,19 +123,18 @@ def choose_feature_step() -> str:
     tags=["recommender"],
 )
 def recommender_daily():
-    extract = batch("extract", "extract", "--input-dir", INBOX, "--workers", "4")
+    import_new = batch("import_new_tracks", *import_command())
     embed = batch("embed", "embed")
     rebuild = batch("rebuild", "rebuild", trigger_rule="none_failed_min_one_success")
     recommend = batch(
         "recommend",
         "recommend",
         "--output",
-        # run_after есть у любого запуска; у ручного в Airflow 3 нет logical_date и {{ ds }}
-        "artifacts/recs_{{ dag_run.run_after | ds }}.parquet",
+        recs_output(),
         "--use-likes",
     )
 
-    extract >> choose_feature_step() >> [embed, rebuild]
+    import_new >> choose_feature_step() >> [embed, rebuild]
     embed >> rebuild
     rebuild >> reload_online_index() >> recommend
 

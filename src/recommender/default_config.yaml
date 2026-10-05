@@ -7,6 +7,19 @@ paths:
   index_dir: data/index
   models_dir: data/models
 
+storage:
+  # Где лежит аудио: local — paths.audio_dir, s3 — S3-совместимое хранилище
+  # (AWS, Yandex Object Storage, MinIO...). Ключи — AWS_ACCESS_KEY_ID и
+  # AWS_SECRET_ACCESS_KEY из окружения, в конфиг их не кладём. При s3 версии
+  # индекса тоже копируются в бакет, а локальная index_dir — рабочая копия.
+  backend: ${AUDIO_STORAGE:-local}
+  s3_bucket: ${S3_BUCKET:-}
+  s3_upload_prefix: ${S3_UPLOAD_PREFIX:-uploads/}   # сюда сервис кладёт загруженные через API треки
+  s3_index_prefix: ${S3_INDEX_PREFIX:-index/}         # копия версий индекса (faiss + joblib)
+  s3_artifacts_prefix: ${S3_ARTIFACTS_PREFIX:-artifacts/}  # выгрузки batch recommend и migrate-s3
+  s3_endpoint_url: ${S3_ENDPOINT_URL:-}             # пусто — AWS
+  s3_region: ${S3_REGION:-us-east-1}
+
 database:
   url: ${DB_URL:-sqlite+aiosqlite:///data/recommender.db}
 

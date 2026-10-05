@@ -3,8 +3,10 @@
 import json
 import logging
 import shutil
+import tempfile
 import uuid
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 import librosa
 from fastapi import (
@@ -18,11 +20,13 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from recommender.application.features import (
     IndexSourceMismatchError,
+    audio_path_of,
     check_index_source,
     uses_embeddings,
 )
@@ -55,6 +59,7 @@ from recommender.infrastructure.storage.artifacts import (
     load_current,
     update_current,
 )
+from recommender.infrastructure.storage.audio_store import store_for, upload_store
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import (
     AutoMLRunORM,
@@ -119,21 +124,28 @@ async def upload_track(
     genre: str | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Загрузить аудио, извлечь фичи, добавить в индекс."""
+    """Загрузить аудио, извлечь фичи, сохранить в хранилище (локально или S3), добавить в индекс."""
     track_id = str(uuid.uuid4())
-    filename = f"{track_id}_{file.filename}"
-    filepath = settings.audio_dir / filename
+    # Только имя файла от клиента, без каталогов
+    filename = f"{track_id}_{Path(file.filename or 'audio').name}"
 
-    with open(filepath, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=False) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+    local_file = Path(tmp.name)
 
     try:
-        features = extract_features(filepath)
+        features = extract_features(local_file)
+        duration = librosa.get_duration(path=str(local_file))
     except Exception as e:
-        filepath.unlink(missing_ok=True)
+        local_file.unlink(missing_ok=True)
         raise HTTPException(400, f"Failed to extract features: {e}") from e
 
-    duration = librosa.get_duration(path=str(filepath))
+    try:
+        audio_path = await run_in_threadpool(upload_store().save_upload, local_file, filename)
+    except Exception as e:
+        local_file.unlink(missing_ok=True)
+        logger.exception("Failed to store uploaded audio %s", filename)
+        raise HTTPException(502, f"Failed to store audio: {e}") from e
 
     track = TrackORM(
         id=track_id,
@@ -141,7 +153,7 @@ async def upload_track(
         artist=artist,
         genre=genre,
         filename=filename,
-        audio_path=str(filepath),
+        audio_path=audio_path,
         duration=duration,
         feature_vector=features_to_bytes(features),
     )
@@ -226,13 +238,16 @@ async def delete_track(request: Request, track_id: str, db: AsyncSession = Depen
     if not track:
         raise HTTPException(404, "Track not found")
 
-    # Удаляем только собственную копию из папки загрузок, не файлы датасетов
-    filepath = settings.audio_dir / track.filename
+    location = audio_path_of(track)
     await db.execute(delete(LikeORM).where(LikeORM.track_id == track_id))
     await db.execute(delete(TrackEmbeddingORM).where(TrackEmbeddingORM.track_id == track_id))
     await db.delete(track)
     await db.commit()
-    filepath.unlink(missing_ok=True)
+    # Аудио удаляется, только если сервис сам его загрузил, а не импортированный каталог
+    try:
+        await run_in_threadpool(store_for(location).delete_upload, location)
+    except Exception:
+        logger.exception("Track %s deleted, but its audio %s was not", track_id, location)
 
     # Публикуем новую версию, иначе после рестарта удалённый трек вернётся из индекса на диске
     _update_index(request, lambda artifacts: bool(artifacts.engine.remove_tracks({track_id})))

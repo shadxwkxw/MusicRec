@@ -11,12 +11,19 @@
 инкрементальные изменения online-сервиса) идёт под блокировкой: изменение
 сервиса применяется к актуальной версии, а не перетирает более новую.
 
+При storage.backend=s3 версии копируются в бакет (index_mirror): новая версия
+выгружается после записи на диск, а перед чтением и изменением локальная
+копия догоняет бакет — так batch и сервис на разных машинах видят одну и ту
+же текущую версию. Если S3 недоступен, работа идёт с локальной копией, а
+невыгруженная версия уйдёт в бакет при следующей синхронизации.
+
 Индекс в старом формате (файлы прямо в index_dir и models_dir) читается как
 версия "legacy" и удаляется после первой публикации.
 """
 
 import datetime
 import fcntl
+import logging
 import os
 import shutil
 import uuid
@@ -27,7 +34,10 @@ from pathlib import Path
 
 from recommender.config import settings
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
+from recommender.infrastructure.storage import index_mirror
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
+
+logger = logging.getLogger(__name__)
 
 POINTER = "CURRENT"
 VERSIONS = "versions"
@@ -99,10 +109,14 @@ def load_version(version: str, root: Path | None = None) -> IndexArtifacts:
 
 def load_current(root: Path | None = None) -> IndexArtifacts:
     """Текущая версия; FileNotFoundError, если индекс ещё ни разу не собирался."""
-    version = current_version(root)
+    path = _root(root)
+    if index_mirror.configured_mirror() is not None:
+        with locked(path):
+            _sync_quietly(path)
+    version = current_version(path)
     if version is None:
-        raise FileNotFoundError(f"No saved index in {_root(root)}")
-    return load_version(version, root)
+        raise FileNotFoundError(f"No saved index in {path}")
+    return load_version(version, path)
 
 
 def _new_version_id() -> str:
@@ -119,14 +133,68 @@ def _write(artifacts: IndexArtifacts, root: Path) -> str:
     artifacts.engine.save(tmp)
     artifacts.normalizer.save(tmp / NORMALIZER)
     os.rename(tmp, versions_dir / version)
-
-    pointer_tmp = root / f"{POINTER}.tmp"
-    pointer_tmp.write_text(version)
-    os.replace(pointer_tmp, root / POINTER)
+    _set_pointer(root, version)
     artifacts.engine.version = version
 
     _prune(root, keep=settings.index_keep_versions, current=version)
+    mirror = index_mirror.configured_mirror()
+    if mirror is not None:
+        try:
+            _push(mirror, root, version)
+        except Exception:
+            logger.warning("Index version %s not copied to S3, will retry on next sync", version)
     return version
+
+
+def _set_pointer(root: Path, version: str) -> None:
+    pointer_tmp = root / f"{POINTER}.tmp"
+    pointer_tmp.write_text(version)
+    os.replace(pointer_tmp, root / POINTER)
+
+
+def _push(mirror: index_mirror.S3IndexMirror, root: Path, version: str) -> None:
+    mirror.upload(version, root / VERSIONS / version)
+    mirror.set_current(version)  # после файлов: по указателю всегда полная версия
+    mirror.prune(keep=settings.index_keep_versions, current=version)
+
+
+def _sync(root: Path) -> str | None:
+    """Свести локальную копию и бакет к более новой версии. Вызывается под блокировкой.
+
+    Возвращает текущую версию в бакете после синхронизации.
+    """
+    mirror = index_mirror.configured_mirror()
+    if mirror is None:
+        return None
+    local, remote = current_version(root), mirror.current()
+    if remote is not None and (local in (None, LEGACY) or remote > local):
+        if remote not in list_versions(root):
+            tmp = root / VERSIONS / f"{TMP_PREFIX}{remote}"
+            shutil.rmtree(tmp, ignore_errors=True)
+            tmp.mkdir(parents=True)
+            mirror.download(remote, tmp)
+            os.rename(tmp, root / VERSIONS / remote)
+        _set_pointer(root, remote)
+        _prune(root, keep=settings.index_keep_versions, current=remote)
+        return remote
+    if local is not None and local != LEGACY and local != remote:
+        _push(mirror, root, local)  # локальная новее: прошлая выгрузка не удалась
+        return local
+    return remote
+
+
+def _sync_quietly(root: Path) -> None:
+    try:
+        _sync(root)
+    except Exception:
+        logger.warning("S3 index sync failed, using the local copy", exc_info=True)
+
+
+def sync(root: Path | None = None) -> str | None:
+    """Синхронизировать локальную копию с бакетом; ошибки S3 не глушатся."""
+    path = _root(root)
+    with locked(path):
+        return _sync(path)
 
 
 def _prune(root: Path, keep: int, current: str) -> None:
@@ -163,6 +231,7 @@ def update_current(
     """
     path = _root(root)
     with locked(path):
+        _sync_quietly(path)
         version = current_version(path)
         artifacts = (
             base

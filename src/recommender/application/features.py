@@ -10,7 +10,6 @@ features.source:
 """
 
 from collections.abc import Collection
-from pathlib import Path
 
 import numpy as np
 from sqlalchemy import select
@@ -58,6 +57,6 @@ def check_index_source(engine: FaissRecommender) -> None:
         )
 
 
-def audio_path_of(track: TrackORM) -> Path:
-    """Где лежит аудио трека: сохранённый путь или папка загрузок."""
-    return Path(track.audio_path) if track.audio_path else settings.audio_dir / track.filename
+def audio_path_of(track: TrackORM) -> str:
+    """Где лежит аудио трека: сохранённый путь или ссылка s3://, иначе папка загрузок."""
+    return track.audio_path or str(settings.audio_dir / track.filename)
