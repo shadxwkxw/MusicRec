@@ -181,8 +181,9 @@ fma-import:
 docker-build:
 	docker compose build
 
+# --build: образ пересобирается, если поменялись зависимости (иначе слои из кэша)
 docker-up:
-	docker compose up -d
+	docker compose up -d --build
 
 docker-down:
 	docker compose down
@@ -214,7 +215,7 @@ docker-batch-recommend:
 airflow-up:
 	mkdir -p data/inbox artifacts airflow/logs
 	docker compose --profile batch build recommender-batch
-	docker compose --profile airflow up -d
+	docker compose --profile airflow up -d --build
 
 airflow-down:
 	docker compose --profile airflow down
