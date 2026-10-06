@@ -24,6 +24,7 @@ dependencies = [
     "alembic>=1.13",
     "python-dotenv>=1.0",
     "boto3>=1.34",
+    "prometheus-client>=0.20",
 ]
 
 [project.scripts]

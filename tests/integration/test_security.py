@@ -36,16 +36,19 @@ async def test_every_write_route_needs_the_key(api, keyed):
 
 
 async def test_reads_are_open_unless_protected(api, keyed, monkeypatch):
-    reads = _routes({"GET"})
+    # health открыт всегда: Docker и балансировщик ключ не передают
+    reads = [(m, p) for m, p in _routes({"GET"}) if not p.startswith("/health/")]
     assert len(reads) >= 6
-    for method, path in reads:
+    for method, path in [*reads, ("GET", "/metrics")]:
         assert (await api.client.request(method, path)).status_code != 401, path
 
     monkeypatch.setattr(settings, "api_protect_reads", True)
-    for method, path in reads:
+    for method, path in [*reads, ("GET", "/metrics")]:
         assert (await api.client.request(method, path)).status_code == 401, path
     resp = await api.client.get("/tracks", headers={"X-API-Key": KEY})
     assert resp.status_code == 200
+    for path in ("/health/live", "/health/ready"):
+        assert (await api.client.get(path)).status_code == 200, path
 
 
 async def test_backend_with_key_can_upload_like_and_reload(api, keyed, audio_files):

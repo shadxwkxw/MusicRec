@@ -70,6 +70,7 @@ from recommender.infrastructure.storage.postgres import (
     async_session,
     get_db,
 )
+from recommender.interfaces.online.observability import count_recommendations
 from recommender.interfaces.online.schemas import (
     AutoMLStatusResponse,
     LikeRequest,
@@ -377,6 +378,7 @@ async def get_recommendations(
             409, f"Track has no {settings.feature_source} features yet (run batch embed)"
         ) from None
 
+    count_recommendations(request, "track", "use_likes" if use_likes else "content")
     return RecommendationResponse(
         source_track_id=track_id,
         recommendations=await _enrich(db, recs),
@@ -404,6 +406,7 @@ async def get_user_recommendations(
     except NoLikedTracksError:
         raise HTTPException(404, "No liked tracks found for user") from None
 
+    count_recommendations(request, "user", result.strategy)
     return RecommendationResponse(
         source_track_id=f"user:{user_id}",
         recommendations=await _enrich(db, result.items),

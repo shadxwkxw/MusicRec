@@ -115,6 +115,15 @@ class Settings(BaseModel):
     api_key: SecretStr | None
     api_protect_reads: bool
     api_cors_origins: list[str]
+    # Наблюдаемость
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+    log_json: bool
+    health_timeout: float = Field(gt=0)
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _upper_log_level(cls, level: object) -> object:
+        return level.upper() if isinstance(level, str) else level
 
     @field_validator("api_key")
     @classmethod
@@ -246,6 +255,9 @@ def _build_settings(raw: dict) -> Settings:
         api_max_upload_mb=raw["api"]["max_upload_mb"],
         api_key=raw["api"]["key"] or None,
         api_protect_reads=raw["api"]["protect_reads"],
+        log_level=raw["observability"]["log_level"],
+        log_json=raw["observability"]["log_json"],
+        health_timeout=raw["observability"]["health_timeout"],
         api_cors_origins=[
             o.strip() for o in str(raw["api"]["cors_origins"] or "").split(",") if o.strip()
         ],

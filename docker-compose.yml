@@ -17,6 +17,8 @@ x-app-env: &app-env
   API_KEY: ${API_KEY:-}
   API_PROTECT_READS: ${API_PROTECT_READS:-false}
   CORS_ORIGINS: ${CORS_ORIGINS:-}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_JSON: ${LOG_JSON:-false}
 
 x-airflow-env: &airflow-env
   AIRFLOW__CORE__EXECUTOR: LocalExecutor

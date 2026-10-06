@@ -147,6 +147,34 @@ curl -X POST http://localhost:8000/likes -H "X-API-Key: $API_KEY" \
 На реальных отложенных лайках (`batch evaluate`, путь `user`) результат тот же,
 что у среднего. `evaluate` и `tune` считают путь `user` той же стратегией, что и API.
 
+### Мониторинг
+
+| Путь | Что | Ключ |
+|---|---|---|
+| `GET /health/live` | процесс отвечает | не нужен |
+| `GET /health/ready` | база и хранилище (S3: `head_bucket`) доступны, состояние индекса; 503, если база или хранилище недоступны | не нужен |
+| `GET /metrics` | метрики Prometheus | если `API_PROTECT_READS` |
+
+`/health/ready` возвращает `ok`, `degraded` (индекс пуст или собран из другого
+источника признаков: сервис принимает загрузки, но рекомендации пустые) или
+`fail` с кодом 503 и подробностями по каждой проверке. На нём же стоит
+`HEALTHCHECK` Docker-образа. Каждая проверка ограничена
+`observability.health_timeout` (3 с).
+
+Метрики: `recommender_http_requests_total` и
+`recommender_http_request_duration_seconds` по методу, **шаблону маршрута**
+(`/recommendations/{track_id}`, а не по каждому id) и статусу;
+`recommender_recommendations_total` по виду и стратегии (`interests`,
+`popular`); `recommender_index_tracks` и `recommender_index_info` (версия,
+источник, метрика); стандартные метрики процесса. Счётчики живут в процессе:
+сервис запускается одним воркером uvicorn.
+
+Логи: одна строка на запрос — метод, путь, шаблон маршрута, статус, время и
+`request_id`. `X-Request-ID` из запроса (например, от веб-приложения)
+сохраняется и возвращается в ответе, иначе генерируется. `LOG_JSON=true`
+пишет JSON-строки для сборщиков логов (Loki, ELK, CloudWatch). Пробы
+`/health/*` и `/metrics` логируются только при `LOG_LEVEL=DEBUG`.
+
 ### Жизненный цикл индекса
 
 Каждая сборка индекса — отдельная неизменяемая версия в
@@ -497,6 +525,7 @@ make db-copy                               # перенести данные и�
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | Postgres в `docker-compose` и адрес для `make db-copy` |
 | `CONFIG_PATH` | другой файл конфига |
 | `API_KEY`, `API_PROTECT_READS`, `CORS_ORIGINS` | доступ к API, см. «Доступ к API» |
+| `LOG_LEVEL`, `LOG_JSON` | уровень и формат логов, см. «Мониторинг» |
 
 Пароль Postgres применяется при первом создании volume `postgres-data`;
 чтобы сменить его у существующей базы, volume придётся пересоздать.
@@ -551,7 +580,7 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) на pus
 | postgres | интеграционные тесты на Postgres 17 и `alembic check`: модели совпадают с миграциями |
 | s3-server | тесты S3 на настоящем сервере RustFS (локально — на moto), см. `S3_TEST_ENDPOINT` |
 | smoke | `make smoke` |
-| e2e-compose | `make e2e-compose`: образ + Postgres + миграции, загрузка, лайки, рекомендации, 401 без ключа, рестарт |
+| e2e-compose | `make e2e-compose`: образ + Postgres + миграции, healthcheck, загрузка, лайки, рекомендации, 401 без ключа, метрики, рестарт |
 | airflow-dags | DAG'и импортируются в образе Airflow (`make airflow-check`) |
 | build | wheel ставится в чистое окружение и запускается вне репозитория |
 | docker | сборка образов online и batch после тестов и Trivy: падает на исправимых уязвимостях HIGH/CRITICAL |

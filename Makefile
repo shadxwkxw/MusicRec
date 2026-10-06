@@ -90,7 +90,7 @@ openapi-check:
 # Отдельный проект и тома, .env не читается — рабочие данные не затрагиваются.
 E2E_PORT    ?= 18000
 E2E_API_KEY ?= e2e-local-key-0123456789abcdef
-E2E_COMPOSE := API_KEY=$(E2E_API_KEY) ONLINE_HOST_PORT=$(E2E_PORT) \
+E2E_COMPOSE := API_KEY=$(E2E_API_KEY) ONLINE_HOST_PORT=$(E2E_PORT) LOG_JSON=true \
 	docker compose -p recommender-e2e --env-file /dev/null -f docker-compose.yml -f docker-compose.e2e.yml
 E2E_RUN     := API_KEY=$(E2E_API_KEY) API_URL=http://localhost:$(E2E_PORT) python3 scripts/e2e_compose.py
 

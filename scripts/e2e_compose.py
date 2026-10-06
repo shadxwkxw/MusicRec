@@ -104,11 +104,16 @@ def wait_ready(timeout: float = 180) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"{API_URL}/openapi.json", timeout=5):
+            with urllib.request.urlopen(f"{API_URL}/health/live", timeout=5):
                 return
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             time.sleep(2)
     raise TimeoutError(f"{API_URL} did not start in {timeout:.0f}s")
+
+
+def metrics() -> str:
+    with urllib.request.urlopen(f"{API_URL}/metrics", timeout=30) as resp:
+        return resp.read().decode()
 
 
 def recommendations(path: str) -> dict:
@@ -132,6 +137,9 @@ def seed() -> None:
 
     status, body = request("POST", "/index/rebuild")
     check(status == 200 and body["tracks_indexed"] == N_TRACKS, f"rebuild indexed {N_TRACKS}")
+    status, body = request("GET", "/health/ready", key=None)
+    check(status == 200 and body["status"] == "ok", f"ready: database, storage, index ({body})")
+    check(f"recommender_index_tracks {N_TRACKS}.0" in metrics(), "metrics: index size")
 
     for track_id in ids[:3]:
         check(post_json("/likes", {"user_id": "u1", "track_id": track_id})[0] == 200, "like")
@@ -170,6 +178,10 @@ def verify() -> None:
     status, tracks = request("GET", "/tracks", key=None)
     check(status == 200 and isinstance(tracks, list) and len(tracks) == N_TRACKS - 1, "deleted")
     check(request("POST", "/index/reload")[0] == 200, "reload with key")
+    check(f"recommender_index_tracks {N_TRACKS - 1}.0" in metrics(), "metrics after delete")
+    req = urllib.request.Request(f"{API_URL}/tracks", headers={"X-Request-ID": "e2e-trace-1"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        check(resp.headers["X-Request-ID"] == "e2e-trace-1", "request id is echoed")
 
 
 if __name__ == "__main__":

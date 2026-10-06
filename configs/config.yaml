@@ -60,6 +60,11 @@ recommendation:
   default_norm_method: standard  # standard | minmax | robust
   default_boost_weight: 0.3      # вес co-like буста в долях разрыва «ближайший — типичный трек»
 
+observability:
+  log_level: ${LOG_LEVEL:-INFO}
+  log_json: ${LOG_JSON:-false}  # одна JSON-строка на запись — для сборщиков логов в продакшене
+  health_timeout: 3             # секунд на проверку базы и хранилища в /health/ready
+
 user_recommendation:
   # Персональные рекомендации (/recommendations/user/{id}): лайки делятся на
   # интересы, выдача — смесь общего среднего и интересов (application/user_profile.py)
