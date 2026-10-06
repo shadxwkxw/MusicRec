@@ -13,8 +13,9 @@ from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import librosa
 import numpy as np
+
+from recommender.infrastructure.data_processing.audio import load_audio
 
 SAMPLE_RATE = 48_000
 MIN_LAST_WINDOW_SECONDS = 3.0
@@ -73,8 +74,7 @@ class ClapEmbedder:
         self.dim = int(self.model.config.projection_dim)
 
     def load(self, path: str | Path) -> np.ndarray:
-        y, _ = librosa.load(str(path), sr=SAMPLE_RATE, mono=True, duration=self.duration_limit)
-        return y
+        return load_audio(path, sr=SAMPLE_RATE, duration=self.duration_limit)
 
     def embed_waveforms(
         self, waveforms: Sequence[np.ndarray], batch_windows: int = 64

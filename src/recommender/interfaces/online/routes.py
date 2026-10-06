@@ -8,7 +8,6 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import IO
 
-import librosa
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -49,6 +48,7 @@ from recommender.application.training.tune_recommender import (
     execute_tuning_run,
 )
 from recommender.config import settings
+from recommender.infrastructure.data_processing.audio import get_duration
 from recommender.infrastructure.data_processing.extract import (
     extract_features,
     features_to_bytes,
@@ -156,7 +156,7 @@ async def upload_track(
 
     try:
         features = extract_features(local_file)
-        duration = librosa.get_duration(path=str(local_file))
+        duration = get_duration(local_file)
     except Exception as e:
         local_file.unlink(missing_ok=True)
         raise HTTPException(400, f"Failed to extract features: {e}") from e

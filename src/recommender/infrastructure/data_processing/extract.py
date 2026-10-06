@@ -12,23 +12,20 @@ from librosa.beat import beat_track
 from librosa.effects import harmonic
 
 from recommender.config import settings
+from recommender.infrastructure.data_processing.audio import load_audio
 
 
 def extract_features(audio_path: str | Path) -> np.ndarray:
     """Извлечь вектор признаков из аудио-файла.
 
     Args:
-        audio_path: путь к аудио (mp3, wav, flac, ogg, ...).
+        audio_path: путь к аудио (mp3, wav, flac, ogg, m4a, ...).
 
     Returns:
         1D numpy array формы (58,).
     """
-    y, sr = librosa.load(
-        str(audio_path),
-        sr=settings.sample_rate,
-        duration=settings.duration_limit,
-        mono=True,
-    )
+    sr = settings.sample_rate
+    y = load_audio(audio_path, sr=sr, duration=settings.duration_limit)
 
     features: list[float] = []
 

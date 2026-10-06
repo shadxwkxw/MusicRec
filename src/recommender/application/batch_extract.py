@@ -13,10 +13,10 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-import librosa
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from recommender.infrastructure.data_processing.audio import get_duration
 from recommender.infrastructure.data_processing.extract import (
     extract_features,
     features_to_bytes,
@@ -51,7 +51,7 @@ def _extract(location: str) -> tuple[bytes, float] | str:
     try:
         with store_for(location).local_copy(location) as path:
             features = extract_features(path)
-            return features_to_bytes(features), librosa.get_duration(path=str(path))
+            return features_to_bytes(features), get_duration(path)
     except Exception as e:
         return f"{type(e).__name__}: {e}"
 
