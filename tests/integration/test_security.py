@@ -7,7 +7,7 @@ from pydantic import SecretStr, ValidationError
 from recommender.config import settings
 from recommender.interfaces.online.main import app, create_app
 
-KEY = "test-key-0123456789abcdef"
+KEY = "test-key-0123456789abcdef"  # gitleaks:allow (ненастоящий ключ для тестов)
 
 
 @pytest.fixture

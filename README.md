@@ -526,6 +526,8 @@ make db-copy                               # перенести данные и�
 | `make typecheck` | mypy |
 | `make audit` | известные уязвимости в версиях из `uv.lock` |
 | `make build` | собрать wheel |
+| `make e2e-compose` | E2E в docker compose: собранный образ, Postgres, API-ключ, рестарт (свои тома, `.env` и `data/` не трогает) |
+| `make openapi` / `openapi-check` | обновить / проверить контракт API `docs/openapi.json` |
 
 Интеграционные тесты и `make smoke` работают во временных папках со своей
 SQLite и не трогают `data/`. Схема в тестах создаётся миграциями. Чтобы
@@ -540,15 +542,24 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) на pus
 | Джоб | Проверка |
 |---|---|
 | lint | актуальность `uv.lock`, ruff той же версии, что в lock |
+| secrets | gitleaks по всей истории коммитов (ложные срабатывания — `.gitleaksignore`) |
+| api-contract | `docs/openapi.json` совпадает с кодом: изменения API видны в PR, по схеме можно генерировать клиент |
 | typecheck | mypy |
 | audit | уязвимости в зависимостях |
 | unit | юнит-тесты на Python 3.11–3.14 |
 | integration | все тесты + покрытие (отчёт в summary и артефактах) |
 | postgres | интеграционные тесты на Postgres 17 и `alembic check`: модели совпадают с миграциями |
+| s3-server | тесты S3 на настоящем сервере RustFS (локально — на moto), см. `S3_TEST_ENDPOINT` |
 | smoke | `make smoke` |
+| e2e-compose | `make e2e-compose`: образ + Postgres + миграции, загрузка, лайки, рекомендации, 401 без ключа, рестарт |
 | airflow-dags | DAG'и импортируются в образе Airflow (`make airflow-check`) |
 | build | wheel ставится в чистое окружение и запускается вне репозитория |
-| docker | сборка образов online и batch после прохождения тестов |
+| docker | сборка образов online и batch после тестов и Trivy: падает на исправимых уязвимостях HIGH/CRITICAL |
+
+Обновления зависимостей, actions и базовых образов раз в неделю присылает
+Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml)); каждый PR
+проходит весь CI. Trivy и gitleaks запускаются из образов с закреплённой
+версией и digest, а не через сторонние actions.
 
 ## Docker
 

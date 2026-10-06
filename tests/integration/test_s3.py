@@ -1,6 +1,14 @@
-"""Хранилище аудио в S3 (moto подменяет S3 внутри процесса: без сети и ключей)."""
+"""Хранилище аудио в S3.
 
+По умолчанию S3 подменяет moto внутри процесса: без сети и ключей. С
+S3_TEST_ENDPOINT те же тесты идут на настоящем S3-совместимом сервере (в CI —
+RustFS): ключи берутся из AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, бакет
+очищается до и после каждого теста.
+"""
+
+import os
 import shutil
+from contextlib import nullcontext
 from pathlib import Path
 
 import boto3
@@ -20,25 +28,37 @@ from tests.integration.test_embeddings import FakeEmbedder, _embed
 from tests.unit.test_artifacts import _adder, _build
 
 BUCKET = "music-bucket"
+ENDPOINT = os.getenv("S3_TEST_ENDPOINT") or None
+
+
+def _empty_bucket(client) -> None:
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=BUCKET):
+        keys = [{"Key": o["Key"]} for o in page.get("Contents", [])]
+        if keys:
+            client.delete_objects(Bucket=BUCKET, Delete={"Objects": keys})
 
 
 @pytest.fixture
 def s3(monkeypatch):
-    for name, value in {
-        "AWS_ACCESS_KEY_ID": "testing",
-        "AWS_SECRET_ACCESS_KEY": "testing",
-        "AWS_DEFAULT_REGION": "us-east-1",
-    }.items():
-        monkeypatch.setenv(name, value)
+    if ENDPOINT is None:
+        for name, value in {
+            "AWS_ACCESS_KEY_ID": "testing",
+            "AWS_SECRET_ACCESS_KEY": "testing",
+        }.items():
+            monkeypatch.setenv(name, value)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     monkeypatch.setattr(settings, "storage_backend", "s3")
     monkeypatch.setattr(settings, "s3_bucket", BUCKET)
     monkeypatch.setattr(settings, "s3_upload_prefix", "uploads/")
-    monkeypatch.setattr(settings, "s3_endpoint_url", None)
+    monkeypatch.setattr(settings, "s3_endpoint_url", ENDPOINT)
     audio_store._s3_client.cache_clear()
-    with mock_aws():
-        client = boto3.client("s3", region_name="us-east-1")
-        client.create_bucket(Bucket=BUCKET)
+    with mock_aws() if ENDPOINT is None else nullcontext():
+        client = boto3.client("s3", endpoint_url=ENDPOINT, region_name="us-east-1")
+        if BUCKET not in {b["Name"] for b in client.list_buckets().get("Buckets", [])}:
+            client.create_bucket(Bucket=BUCKET)
+        _empty_bucket(client)
         yield client
+        _empty_bucket(client)
     audio_store._s3_client.cache_clear()
 
 

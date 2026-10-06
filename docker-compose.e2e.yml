@@ -1,0 +1,25 @@
+# E2E поверх docker-compose.yml (make e2e-compose, CI): свои контейнеры, сеть и
+# тома — рабочие data/, база и запущенный dev-стек не затрагиваются.
+#   docker compose -p recommender-e2e --env-file /dev/null \
+#     -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
+services:
+  postgres:
+    container_name: recommender-e2e-postgres
+    ports: !reset []
+  recommender-online:
+    container_name: recommender-e2e-online
+    volumes: !override
+      - e2e-data:/app/data
+    command: uvicorn recommender.interfaces.online.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/openapi.json')"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+networks:
+  default:
+    name: recommender-e2e-net
+
+volumes:
+  e2e-data:

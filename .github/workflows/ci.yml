@@ -12,6 +12,10 @@ concurrency:
 
 env:
   PYTHONUNBUFFERED: "1"
+  # Сканеры запускаются из образов с закреплённой версией и digest, а не через
+  # сторонние actions: тег можно подменить, digest — нет
+  TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+  GITLEAKS_IMAGE: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
 
 jobs:
   # ── Быстрые проверки без тяжёлых зависимостей ──────────────────
@@ -53,6 +57,31 @@ jobs:
       - run: make install
       - run: make audit
 
+  secrets:
+    name: Secret scan (gitleaks, full history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No secrets in any commit
+        # Ложные срабатывания — в .gitleaksignore или комментарием gitleaks:allow
+        run: docker run --rm -v "$PWD":/repo "$GITLEAKS_IMAGE" git /repo --redact --no-banner -v
+
+  api-contract:
+    name: API contract (docs/openapi.json)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
+      - run: make install
+      - name: Schema matches the code
+        run: make openapi-check
+
   # ── Тесты ──────────────────────────────────────────────────────
   unit:
     name: Unit tests (py${{ matrix.python }})
@@ -80,17 +109,20 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
+      # ffmpeg — для тестов m4a (без него они пропускаются)
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1 ffmpeg
       - run: make install
       - name: Tests with coverage
         run: make coverage
       - name: Coverage summary
         if: always()
         run: |
-          echo '## Coverage' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          .venv/bin/coverage report --skip-covered >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '## Coverage'
+            echo '```'
+            .venv/bin/coverage report --skip-covered
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -127,6 +159,35 @@ jobs:
       - name: Models match migrations
         run: make migrate && .venv/bin/alembic check
 
+  s3-server:
+    name: S3 tests on a real server (RustFS)
+    runs-on: ubuntu-latest
+    services:
+      rustfs:
+        image: rustfs/rustfs:1.0.1
+        env:
+          RUSTFS_ACCESS_KEY: ci-access-key
+          RUSTFS_SECRET_KEY: ci-secret-key-123
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -fs http://localhost:9000/health"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      S3_TEST_ENDPOINT: http://localhost:9000
+      AWS_ACCESS_KEY_ID: ci-access-key
+      AWS_SECRET_ACCESS_KEY: ci-secret-key-123
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
+      - run: make install
+      - name: Same tests as with moto, against RustFS
+        run: .venv/bin/pytest tests/integration/test_s3.py -v
+
   smoke:
     name: Smoke (uvicorn + restart + batch CLI)
     runs-on: ubuntu-latest
@@ -139,6 +200,14 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsndfile1
       - run: make install
       - run: make smoke
+
+  e2e-compose:
+    name: E2E (docker compose + Postgres + API key)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image, migrations, upload, likes, restart, delete
+        run: make e2e-compose E2E_API_KEY=ci-e2e-key-0123456789abcdef
 
   airflow-dags:
     name: Airflow DAGs import
@@ -193,6 +262,25 @@ jobs:
           context: .
           file: services/${{ matrix.service }}/Dockerfile
           push: false
+          load: true
+          pull: true  # свежий базовый образ: исправления безопасности
           tags: music-recommender-${{ matrix.service }}:ci
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Vulnerability scan (Trivy)
+        # Падает на уязвимостях HIGH/CRITICAL, для которых уже есть исправление:
+        # обычно хватает пересборки (apt-get upgrade, свежий базовый образ) или
+        # обновления зависимости в uv.lock
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+            --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            --format table music-recommender-${{ matrix.service }}:ci | tee trivy.txt
+      - name: Scan summary
+        if: always()
+        run: |
+          {
+            echo '## Trivy: ${{ matrix.service }}'
+            echo '```'
+            grep -E '^(Total|[a-z].*\()' trivy.txt || echo "no report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

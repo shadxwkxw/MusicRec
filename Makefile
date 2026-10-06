@@ -1,5 +1,5 @@
 .PHONY: env install install-embeddings lock upgrade run test test-unit test-integration coverage smoke audit build \
-        lint format typecheck clean \
+        lint format typecheck clean e2e-compose openapi openapi-check \
         docker-build docker-up docker-down docker-logs \
         batch-extract batch-import-s3 batch-migrate-s3 batch-embed batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
         docker-batch-extract docker-batch-embed docker-batch-rebuild docker-batch-tune docker-batch-recommend \
@@ -78,6 +78,27 @@ coverage:
 # Настоящий uvicorn + рестарт + batch CLI во временной папке
 smoke:
 	$(PY) scripts/smoke_test.py
+
+# Контракт API: docs/openapi.json (make openapi после изменения эндпоинтов)
+openapi:
+	$(PY) scripts/export_openapi.py
+
+openapi-check:
+	$(PY) scripts/export_openapi.py --check
+
+# E2E в docker compose: собранный образ, Postgres, API-ключ, рестарт сервиса.
+# Отдельный проект и тома, .env не читается — рабочие данные не затрагиваются.
+E2E_PORT    ?= 18000
+E2E_API_KEY ?= e2e-local-key-0123456789abcdef
+E2E_COMPOSE := API_KEY=$(E2E_API_KEY) ONLINE_HOST_PORT=$(E2E_PORT) \
+	docker compose -p recommender-e2e --env-file /dev/null -f docker-compose.yml -f docker-compose.e2e.yml
+E2E_RUN     := API_KEY=$(E2E_API_KEY) API_URL=http://localhost:$(E2E_PORT) python3 scripts/e2e_compose.py
+
+e2e-compose:
+	$(E2E_COMPOSE) up -d --build --wait postgres recommender-online
+	$(E2E_RUN) seed && $(E2E_COMPOSE) restart recommender-online && $(E2E_RUN) verify; \
+	status=$$?; [ $$status -eq 0 ] || $(E2E_COMPOSE) logs recommender-online | tail -50; \
+	$(E2E_COMPOSE) down -v; exit $$status
 
 # Проверяет зафиксированные в uv.lock версии (для всех версий Python), а не .venv
 audit:

@@ -1,0 +1,1138 @@
+{
+  "components": {
+    "schemas": {
+      "AutoMLStatusResponse": {
+        "properties": {
+          "best_params": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Params"
+          },
+          "best_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Score"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "metrics": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metrics"
+          },
+          "n_trials": {
+            "title": "N Trials",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "n_trials"
+        ],
+        "title": "AutoMLStatusResponse",
+        "type": "object"
+      },
+      "Body_upload_track_tracks_upload_post": {
+        "properties": {
+          "artist": {
+            "default": "Unknown",
+            "title": "Artist",
+            "type": "string"
+          },
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "genre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genre"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "title"
+        ],
+        "title": "Body_upload_track_tracks_upload_post",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LikeRequest": {
+        "properties": {
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "track_id"
+        ],
+        "title": "LikeRequest",
+        "type": "object"
+      },
+      "LikeResponse": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "user_id",
+          "track_id"
+        ],
+        "title": "LikeResponse",
+        "type": "object"
+      },
+      "RecommendationItem": {
+        "properties": {
+          "artist": {
+            "title": "Artist",
+            "type": "string"
+          },
+          "genre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genre"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "track_id",
+          "title",
+          "artist",
+          "score"
+        ],
+        "title": "RecommendationItem",
+        "type": "object"
+      },
+      "RecommendationResponse": {
+        "properties": {
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendationItem"
+            },
+            "title": "Recommendations",
+            "type": "array"
+          },
+          "source_track_id": {
+            "title": "Source Track Id",
+            "type": "string"
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy"
+          }
+        },
+        "required": [
+          "source_track_id",
+          "recommendations"
+        ],
+        "title": "RecommendationResponse",
+        "type": "object"
+      },
+      "SearchResponse": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendationItem"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "results"
+        ],
+        "title": "SearchResponse",
+        "type": "object"
+      },
+      "TrackFeaturesResponse": {
+        "properties": {
+          "dimension": {
+            "title": "Dimension",
+            "type": "integer"
+          },
+          "features": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "track_id",
+          "dimension",
+          "features"
+        ],
+        "title": "TrackFeaturesResponse",
+        "type": "object"
+      },
+      "TrackResponse": {
+        "properties": {
+          "artist": {
+            "title": "Artist",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "genre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genre"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "indexed": {
+            "default": true,
+            "title": "Indexed",
+            "type": "boolean"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "artist",
+          "created_at"
+        ],
+        "title": "TrackResponse",
+        "type": "object"
+      },
+      "TrackUpdate": {
+        "properties": {
+          "artist": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artist"
+          },
+          "genre": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genre"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "TrackUpdate",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "in": "header",
+        "name": "X-API-Key",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "description": "Content-based music recommendation with hyperparameter tuning",
+    "title": "Music Recommender API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/automl/status": {
+      "get": {
+        "operationId": "get_tuning_status_automl_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AutoMLStatusResponse"
+                  },
+                  "title": "Response Get Tuning Status Automl Status Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Tuning Status"
+      }
+    },
+    "/automl/train": {
+      "post": {
+        "description": "Запустить оптимизацию в фоне; по завершении сервис переключается на новый индекс.",
+        "operationId": "start_tuning_automl_train_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Start Tuning"
+      }
+    },
+    "/index/rebuild": {
+      "post": {
+        "operationId": "rebuild_index_endpoint_index_rebuild_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Rebuild Index Endpoint"
+      }
+    },
+    "/index/reload": {
+      "post": {
+        "description": "Подхватить индекс и нормализатор с диска, например после batch rebuild / tune.",
+        "operationId": "reload_index_index_reload_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Reload Index"
+      }
+    },
+    "/likes": {
+      "post": {
+        "description": "Поставить лайк. Повторный лайк того же трека ничего не меняет (status=exists).",
+        "operationId": "add_like_likes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LikeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LikeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Add Like"
+      }
+    },
+    "/likes/{user_id}/{track_id}": {
+      "delete": {
+        "operationId": "remove_like_likes__user_id___track_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "track_id",
+            "required": true,
+            "schema": {
+              "title": "Track Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Remove Like"
+      }
+    },
+    "/recommendations/user/{user_id}": {
+      "get": {
+        "description": "Персональные рекомендации по интересам из лайков; без лайков — популярное.",
+        "operationId": "get_user_recommendations_recommendations_user__user_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "use_likes",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Use Likes",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get User Recommendations"
+      }
+    },
+    "/recommendations/{track_id}": {
+      "get": {
+        "description": "Рекомендации по треку: сходство + коллаборативный бустинг.",
+        "operationId": "get_recommendations_recommendations__track_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "track_id",
+            "required": true,
+            "schema": {
+              "title": "Track Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "use_likes",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Use Likes",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Recommendations"
+      }
+    },
+    "/search": {
+      "get": {
+        "description": "Треки по текстовому описанию: «calm acoustic folk», «energetic hip-hop beat».",
+        "operationId": "search_search_get",
+        "parameters": [
+          {
+            "description": "Описание на английском",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "description": "Описание на английском",
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Search"
+      }
+    },
+    "/tracks": {
+      "get": {
+        "operationId": "get_all_tracks_tracks_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrackResponse"
+                  },
+                  "title": "Response Get All Tracks Tracks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get All Tracks"
+      }
+    },
+    "/tracks/upload": {
+      "post": {
+        "description": "Загрузить аудио, извлечь фичи, сохранить в хранилище (локально или S3), добавить в индекс.",
+        "operationId": "upload_track_tracks_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_track_tracks_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Upload Track"
+      }
+    },
+    "/tracks/{track_id}": {
+      "delete": {
+        "description": "Удалить трек вместе с лайками, эмбеддингами, аудиофайлом и записью в индексе.",
+        "operationId": "delete_track_tracks__track_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "track_id",
+            "required": true,
+            "schema": {
+              "title": "Track Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Delete Track"
+      },
+      "patch": {
+        "description": "Исправить метаданные трека. Фичи и индекс не затрагиваются.",
+        "operationId": "update_track_tracks__track_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "track_id",
+            "required": true,
+            "schema": {
+              "title": "Track Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Update Track"
+      }
+    },
+    "/tracks/{track_id}/features": {
+      "get": {
+        "operationId": "get_track_features_tracks__track_id__features_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "track_id",
+            "required": true,
+            "schema": {
+              "title": "Track Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackFeaturesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Track Features"
+      }
+    },
+    "/users/{user_id}/likes": {
+      "get": {
+        "description": "Лайкнутые треки пользователя, сначала последние.",
+        "operationId": "get_user_likes_users__user_id__likes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrackResponse"
+                  },
+                  "title": "Response Get User Likes Users  User Id  Likes Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get User Likes"
+      }
+    }
+  }
+}

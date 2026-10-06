@@ -1,0 +1,30 @@
+# Еженедельные PR с обновлениями. Каждый проходит весь CI: тесты, аудит, Trivy.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /services/online
+      - /services/batch
+    schedule:
+      interval: weekly
+    ignore:
+      # Python в образе меняем вместе с проектом, а не автоматически
+      - dependency-name: python
+        update-types: [version-update:semver-minor, version-update:semver-major]
