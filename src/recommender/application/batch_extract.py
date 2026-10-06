@@ -122,21 +122,33 @@ async def run_batch_import(
     return stats
 
 
+def artist_and_title(stem: str, default_artist: str) -> tuple[str, str]:
+    """«Артист - Название» из имени файла; без разделителя — default_artist и имя целиком.
+
+    Делится по первому « - » с пробелами вокруг: дефис внутри слов (A-ha,
+    Jay-Z) и в названии после разделителя не мешают.
+    """
+    artist, sep, title = stem.partition(" - ")
+    if not sep or not artist.strip() or not title.strip():
+        return default_artist, stem
+    return artist.strip(), title.strip()
+
+
 async def run_batch_extract(
     input_dir: Path,
     db: AsyncSession,
     default_artist: str = "Unknown",
     workers: int = 1,
 ) -> BatchExtractResult:
-    """Импортировать все аудиофайлы директории: title — имя файла, artist — default_artist."""
+    """Импортировать все аудиофайлы директории: «Артист - Название.mp3» или default_artist."""
     if not input_dir.exists() or not input_dir.is_dir():
         raise ValueError(f"Input directory not found: {input_dir}")
 
-    items = [
-        ImportItem(path=path, filename=path.name, title=path.stem, artist=default_artist)
-        for path in sorted(input_dir.iterdir())
-        if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
-    ]
+    items = []
+    for path in sorted(input_dir.iterdir()):
+        if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
+            artist, title = artist_and_title(path.stem, default_artist)
+            items.append(ImportItem(path, path.name, title, artist))
     return await run_batch_import(items, db, workers=workers)
 
 
@@ -147,12 +159,8 @@ def s3_import_items(prefix: str, default_artist: str = "Unknown") -> list[Import
     пропускает уже загруженное.
     """
     store = configured_s3_store()
-    return [
-        ImportItem(
-            path=f"s3://{store.bucket}/{key}",
-            filename=key,
-            title=PurePosixPath(key).stem,
-            artist=default_artist,
-        )
-        for key in store.list_audio(prefix)
-    ]
+    items = []
+    for key in store.list_audio(prefix):
+        artist, title = artist_and_title(PurePosixPath(key).stem, default_artist)
+        items.append(ImportItem(f"s3://{store.bucket}/{key}", key, title, artist))
+    return items

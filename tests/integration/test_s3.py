@@ -347,3 +347,15 @@ async def test_batch_recommend_writes_to_s3(api, s3):
     lines = body.splitlines()
     assert lines[0] == "source_track_id,rank,target_track_id,score"
     assert len(lines) == 1 + 3 * 2
+
+
+def test_s3_import_takes_artist_and_title_from_key(s3):
+    for key in ("music/Heronwater - Мяу.mp3", "music/sub/untitled.mp3"):
+        s3.put_object(Bucket=BUCKET, Key=key, Body=b"x")
+
+    items = {i.filename: (i.artist, i.title) for i in s3_import_items("music/", "Catalog")}
+
+    assert items == {
+        "music/Heronwater - Мяу.mp3": ("Heronwater", "Мяу"),
+        "music/sub/untitled.mp3": ("Catalog", "untitled"),
+    }

@@ -162,3 +162,24 @@ async def test_genre_tuning_picks_boost_from_likes(api, audio_files, tmp_path, m
     grid = np.linspace(0.0, settings.tuning_max_boost_weight, 13)
     assert np.isclose(grid, boost).any()
     assert app.state.engine.boost_weight == pytest.approx(boost)
+
+
+@pytest.mark.parametrize(
+    ("stem", "expected"),
+    [
+        (
+            "Heronwater - Мяу (prod. by Heronwater, Rallex)",
+            ("Heronwater", "Мяу (prod. by Heronwater, Rallex)"),
+        ),
+        ("LIZER, FLESH - Kids", ("LIZER, FLESH", "Kids")),
+        ("A-ha - Take On Me", ("A-ha", "Take On Me")),  # дефис без пробелов — часть имени
+        ("Cutting Crew - (I Just) Died - Live", ("Cutting Crew", "(I Just) Died - Live")),
+        ("track_07", ("Catalog", "track_07")),
+        (" - no artist", ("Catalog", " - no artist")),
+        ("no title - ", ("Catalog", "no title - ")),
+    ],
+)
+def test_artist_and_title_from_file_name(stem, expected):
+    from recommender.application.batch_extract import artist_and_title
+
+    assert artist_and_title(stem, "Catalog") == expected
