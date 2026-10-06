@@ -5,6 +5,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Обновлять только uv.lock: диапазоны в pyproject.toml не трогаем, точные
+    # версии и так зафиксированы в lock (иначе — отдельный PR на каждый пакет)
+    versioning-strategy: lockfile-only
     groups:
       python-minor-patch:
         update-types: [minor, patch]
