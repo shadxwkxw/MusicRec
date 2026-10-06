@@ -207,7 +207,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Image, migrations, upload, likes, restart, delete
-        run: make e2e-compose E2E_API_KEY=ci-e2e-key-0123456789abcdef
+        # Ключ свой на каждый запуск и скрыт в логах: в репозитории ключей нет
+        run: |
+          key=$(openssl rand -hex 32)
+          echo "::add-mask::$key"
+          make e2e-compose E2E_API_KEY="$key"
 
   airflow-dags:
     name: Airflow DAGs import

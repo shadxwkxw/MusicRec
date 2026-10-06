@@ -1,3 +1,5 @@
 # Ложные срабатывания gitleaks (отпечаток = коммит:файл:правило:строка).
 # Тестовый ключ из tests/integration/test_security.py, в коде помечен gitleaks:allow
 d11d54f3328364949405f9c40854af9e5ba71834:tests/integration/test_security.py:generic-api-key:10
+# Тестовый ключ E2E, который был в ci.yml; теперь CI генерирует ключ на каждый запуск
+677e7349f86bb6e348abaea9d583d7e190f774f5:.github/workflows/ci.yml:generic-api-key:210
