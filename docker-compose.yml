@@ -10,7 +10,8 @@ x-app-env: &app-env
   S3_IMPORT_PREFIX: ${S3_IMPORT_PREFIX:-}
   S3_INDEX_PREFIX: ${S3_INDEX_PREFIX:-index/}
   S3_ARTIFACTS_PREFIX: ${S3_ARTIFACTS_PREFIX:-artifacts/}
-  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+  # Контейнеры ходят в S3 по адресу из docker-сети, если он задан, иначе как хост
+  S3_ENDPOINT_URL: ${S3_CONTAINER_ENDPOINT_URL:-${S3_ENDPOINT_URL:-}}
   S3_REGION: ${S3_REGION:-us-east-1}
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
@@ -44,7 +45,8 @@ x-airflow-env: &airflow-env
   S3_IMPORT_PREFIX: ${S3_IMPORT_PREFIX:-}
   S3_INDEX_PREFIX: ${S3_INDEX_PREFIX:-index/}
   S3_ARTIFACTS_PREFIX: ${S3_ARTIFACTS_PREFIX:-artifacts/}
-  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+  # Контейнеры ходят в S3 по адресу из docker-сети, если он задан, иначе как хост
+  S3_ENDPOINT_URL: ${S3_CONTAINER_ENDPOINT_URL:-${S3_ENDPOINT_URL:-}}
   S3_REGION: ${S3_REGION:-us-east-1}
   AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
   AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
@@ -133,7 +135,7 @@ services:
   # ── Локальное S3-хранилище (профиль s3): RustFS, S3-совместимый сервер с веб-консолью ──
   # Данные лежат в томе s3-data и переживают перезапуск. Бакет S3_BUCKET создаётся
   # при старте (папка в корне данных = бакет). В .env: AUDIO_STORAGE=s3, S3_BUCKET=music,
-  # S3_ENDPOINT_URL=http://s3:9000 (с хоста — http://localhost:5050),
+  # S3_ENDPOINT_URL=http://localhost:5050, S3_CONTAINER_ENDPOINT_URL=http://s3:9000,
   # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY — они же логин и пароль консоли.
   # Консоль: http://localhost:9001/rustfs/console/
   s3:

@@ -456,7 +456,8 @@ S3-совместимый сервер с веб-консолью. Данные 
 ```bash
 AUDIO_STORAGE=s3
 S3_BUCKET=music
-S3_ENDPOINT_URL=http://localhost:5050   # для make run; из контейнеров — http://s3:9000
+S3_ENDPOINT_URL=http://localhost:5050   # для make run и batch CLI с хоста
+S3_CONTAINER_ENDPOINT_URL=http://s3:9000  # для контейнеров (online, batch, Airflow)
 AWS_ACCESS_KEY_ID=rustfsadmin           # логин консоли
 AWS_SECRET_ACCESS_KEY=придумайте-пароль # пароль консоли
 ```
