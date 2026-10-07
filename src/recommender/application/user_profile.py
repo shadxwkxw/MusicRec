@@ -10,8 +10,8 @@
 
 Выдача: доля mean_share — ближайшие к общему среднему (у однородного вкуса это
 лучший запрос), остальные места делятся между интересами пропорционально
-числу их лайков. Не больше max_per_artist треков одного артиста — кроме
-артистов, которых пользователь уже лайкал: их новые треки и есть то, чего он
+числу их лайков. Не больше max_per_artist треков одного артиста (соавторы —
+по отдельности, см. domain/artists.py) — кроме артистов, которых пользователь уже лайкал: их новые треки и есть то, чего он
 ждёт (на реальных лайках лимит для них прятал целевой трек).
 
 Порог и доли подобраны на синтетических пользователях из жанров FMA (лайки
@@ -22,13 +22,13 @@
 задают слоты, а не скоры.
 """
 
-from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
 import numpy as np
 
 from recommender.config import settings
+from recommender.domain.artists import ArtistCap, artist_names
 from recommender.domain.models import Recommendation
 from recommender.domain.recommender import Recommender
 
@@ -117,28 +117,25 @@ def blend(
     artists: Mapping[str, str | None] | None = None,
     max_per_artist: int | None = None,
     mean_share: float | None = None,
-    liked_artists: set[str] | None = None,
+    liked_artists: Collection[str] = (),
 ) -> list[Recommendation]:
     """Собрать выдачу: общее среднее, потом интересы по квотам, не больше max_per_artist
-    треков одного артиста (0 — без ограничения; артисты — {track_id: artist}),
-    кроме liked_artists."""
+    треков на имя артиста (0 — без ограничения; артисты — {track_id: строка artist},
+    соавторы считаются каждый), кроме имён из liked_artists."""
     max_per_artist = settings.user_max_per_artist if max_per_artist is None else max_per_artist
     mean_share = settings.user_mean_share if mean_share is None else mean_share
-    artists = artists if max_per_artist else {}
-    liked_artists = liked_artists or set()
+    artists = artists or {}
+    limiter = ArtistCap(max_per_artist, liked_artists)
     taken: list[Recommendation] = []
     seen: set[str] = set()
-    per_artist: Counter[str] = Counter()
 
     def take(rec: Recommendation, cap: bool = True) -> bool:
-        artist = (artists or {}).get(rec.track_id)
-        capped = artist and artist not in liked_artists and per_artist[artist] >= max_per_artist
-        if rec.track_id in seen or (cap and capped):
+        names = artist_names(artists.get(rec.track_id))
+        if rec.track_id in seen or (cap and not limiter.allows(names)):
             return False
         seen.add(rec.track_id)
         taken.append(rec)
-        if artist:
-            per_artist[artist] += 1
+        limiter.add(names)
         return True
 
     lists = candidates.by_interest

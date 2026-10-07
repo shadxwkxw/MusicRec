@@ -31,6 +31,7 @@ from recommender.application.collaborative import (
 from recommender.application.features import check_index_source, load_vectors
 from recommender.application.user_profile import blend, interest_candidates
 from recommender.config import settings
+from recommender.domain.artists import artist_groups, artist_names, names_of
 from recommender.infrastructure.storage.artifacts import load_current
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import TrackORM
@@ -109,13 +110,17 @@ def holdout_queries(train: UserLikes, test: UserLikes, known: set[str]) -> list[
 def split_by_artist(
     track_ids: Collection[str], artists: Mapping[str, str], test_fraction: float, seed: int
 ) -> tuple[list[str], list[str]]:
-    """Отложить долю артистов целиком: треки одного артиста не попадут по обе стороны."""
-    names = sorted({artists.get(t, "") for t in track_ids})
+    """Отложить долю артистов целиком: треки одного артиста не попадут по обе стороны.
+
+    Артисты, связанные коллаборациями (Lizer и «LIZER, FLESH»), — одна группа.
+    """
+    groups = artist_groups({t: artists.get(t, "") for t in track_ids})
+    names = sorted(set(groups.values()))
     random.Random(seed).shuffle(names)
     n_test = min(len(names) - 1, round(len(names) * test_fraction)) if len(names) > 1 else 0
-    test_artists = set(names[:n_test])
-    tune = sorted(t for t in track_ids if artists.get(t, "") not in test_artists)
-    test = sorted(t for t in track_ids if artists.get(t, "") in test_artists)
+    test_groups = set(names[:n_test])
+    tune = sorted(t for t in track_ids if groups[t] not in test_groups)
+    test = sorted(t for t in track_ids if groups[t] in test_groups)
     return tune, test
 
 
@@ -142,7 +147,7 @@ def system_ranker(
             candidates = interest_candidates(
                 engine, vectors, k, exclude_ids=set(query.exclude), like_boost=boost or None
             )
-            liked_artists = {a for t in query.query_ids if (a := (artists or {}).get(t))}
+            liked_artists = names_of(artists or {}, query.query_ids)
             return [r.track_id for r in blend(candidates, k, artists, liked_artists=liked_artists)]
 
         (query_id,) = query.query_ids
@@ -173,10 +178,12 @@ def same_artist_ranker(track_ids: list[str], artists: dict[str, str], train: Use
     """Сначала треки артистов из известных лайков, внутри — по популярности."""
     counts = Counter(t for liked in train.values() for t in liked)
 
+    names = {t: artist_names(artists.get(t)) for t in track_ids}
+
     def rank(query: Query, k: int) -> list[str]:
-        affinity = Counter(artists[t] for t in query.query_ids)
+        affinity = Counter(n for t in query.query_ids for n in names.get(t, ()))
         candidates = [t for t in track_ids if t not in query.exclude]
-        candidates.sort(key=lambda t: (-affinity[artists[t]], -counts[t], t))
+        candidates.sort(key=lambda t: (-sum(affinity[n] for n in names[t]), -counts[t], t))
         return candidates[:k]
 
     return rank
@@ -287,9 +294,11 @@ def genre_report(
         return {}
     n_tracks = len(id_to_idx)
     genre_size = Counter(genres[t] for t in id_to_idx if genres.get(t))
+    # «Тот же артист» — группа по общим именам, включая соавторов (domain/artists.py)
+    groups = artist_groups({t: artists.get(t, "") for t in id_to_idx})
     by_artist: dict[str, set[str]] = {}
     for track_id in id_to_idx:
-        by_artist.setdefault(artists.get(track_id, ""), set()).add(track_id)
+        by_artist.setdefault(groups[track_id], set()).add(track_id)
 
     def same_share(track_id: str, exclude: set[str]) -> float:
         recs = engine.recommend(normalized[id_to_idx[track_id]], limit=k, exclude_ids=exclude)
@@ -299,7 +308,7 @@ def genre_report(
     for track_id in labeled:
         genre = genres[track_id]
         assert genre is not None
-        artist_tracks = by_artist[artists.get(track_id, "")]
+        artist_tracks = by_artist[groups[track_id]]
         artist_same_genre = sum(genres.get(t) == genre for t in artist_tracks)
         by_genre.setdefault(genre, []).append(
             (

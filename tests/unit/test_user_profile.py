@@ -76,7 +76,7 @@ def test_blend_caps_unknown_artist_but_not_liked_one():
     candidates = InterestCandidates(_recs("x1", "x2", "x3", "y1", "y2", "y3", "z1"), [], [5])
     artists = {"x1": "X", "x2": "X", "x3": "X", "y1": "Y", "y2": "Y", "y3": "Y", "z1": "Z"}
 
-    ids = [r.track_id for r in blend(candidates, 6, artists, max_per_artist=2, liked_artists={"Y"})]
+    ids = [r.track_id for r in blend(candidates, 6, artists, max_per_artist=2, liked_artists={"y"})]
 
     assert ids == ["x1", "x2", "y1", "y2", "y3", "z1"]
 

@@ -6,7 +6,6 @@
   см. user_profile.py; без лайков — популярные треки)
 """
 
-from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,6 +19,7 @@ from recommender.application.collaborative import (
 from recommender.application.features import load_vectors
 from recommender.application.user_profile import blend, interest_candidates
 from recommender.config import settings
+from recommender.domain.artists import ArtistCap, artist_names, names_of
 from recommender.domain.models import Recommendation
 from recommender.domain.recommender import Recommender
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
@@ -112,7 +112,7 @@ async def recommend_for_user(
         engine, vectors, limit, exclude_ids=set(all_liked), like_boost=like_boost or None
     )
     artists = await _artists(db, candidates.track_ids | set(recent))
-    liked_artists = {a for t in recent if (a := artists.get(t))}
+    liked_artists = names_of(artists, recent)
     return UserRecommendations(
         blend(candidates, limit, artists, liked_artists=liked_artists), "interests"
     )
@@ -142,16 +142,16 @@ async def popular_tracks(
     )
     picked: list[Recommendation] = []
     skipped: list[Recommendation] = []  # из-за лимита по артисту — добор, если не хватит
-    per_artist: Counter[str] = Counter()
-    cap = settings.user_max_per_artist
+    limiter = ArtistCap(settings.user_max_per_artist)
     for track_id, artist, count in result.all():
         if track_id not in indexed or track_id in exclude_ids:
             continue
         rec = Recommendation(track_id=track_id, score=float(count))
-        if cap and artist and per_artist[artist] >= cap:
+        names = artist_names(artist)
+        if not limiter.allows(names):
             skipped.append(rec)
             continue
-        per_artist[artist] += 1
+        limiter.add(names)
         picked.append(rec)
         if len(picked) >= limit:
             break
