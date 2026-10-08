@@ -1,7 +1,7 @@
 .PHONY: env install install-embeddings lock upgrade run test test-unit test-integration coverage smoke audit build \
         lint format typecheck clean e2e-compose openapi openapi-check \
         docker-build docker-up docker-down docker-logs \
-        batch-extract batch-import-s3 batch-migrate-s3 batch-embed batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
+        batch-extract batch-import-s3 batch-migrate-s3 add-music batch-embed batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
         docker-batch-extract docker-batch-embed docker-batch-rebuild docker-batch-tune docker-batch-recommend \
         migrate migration db-copy fma-unpack fma-import \
         airflow-up airflow-down airflow-logs airflow-check
@@ -134,6 +134,18 @@ batch-extract:
 S3_IMPORT_PREFIX ?=
 batch-import-s3:
 	$(PY) services/batch/main.py import-s3 --prefix "$(S3_IMPORT_PREFIX)" --workers $(WORKERS)
+
+# Новая музыка одной командой: папка → S3 (без дублей) → импорт → эмбеддинги → индекс.
+# make add-music DIR=musicnew [MUSIC_PREFIX=music/]. Файлы — «Артист - Название.mp3»,
+# жанр берётся из тегов. Reload — если сервис запущен (иначе подхватит при старте).
+MUSIC_PREFIX ?= music/
+add-music:
+	@test -n "$(DIR)" || (echo "usage: make add-music DIR=path/to/folder" && exit 1)
+	$(PY) services/batch/main.py upload-s3 --dir "$(DIR)" --prefix "$(MUSIC_PREFIX)"
+	$(PY) services/batch/main.py import-s3 --prefix "$(MUSIC_PREFIX)" --workers $(WORKERS)
+	$(PY) services/batch/main.py embed
+	$(PY) services/batch/main.py rebuild
+	@$(MAKE) --no-print-directory index-reload || echo "service is not running: it will load the new index on start"
 
 # Перенос в S3 (AUDIO_STORAGE=s3): аудио из data/audio, индекс, artifacts/*.parquet.
 # make batch-migrate-s3 DELETE_LOCAL=1 — удалить локальные копии аудио после переноса

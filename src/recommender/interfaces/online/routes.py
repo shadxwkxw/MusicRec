@@ -54,6 +54,7 @@ from recommender.infrastructure.data_processing.extract import (
     features_to_bytes,
 )
 from recommender.infrastructure.data_processing.normalize import FeatureNormalizer
+from recommender.infrastructure.data_processing.tags import read_tags
 from recommender.infrastructure.data_processing.text_worker import ProcessTextEncoder
 from recommender.infrastructure.storage.artifacts import (
     IndexArtifacts,
@@ -158,6 +159,7 @@ async def upload_track(
     try:
         features = extract_features(local_file)
         duration = get_duration(local_file)
+        genre = genre or read_tags(local_file).genre  # жанр из тегов файла, если не передан
     except Exception as e:
         local_file.unlink(missing_ok=True)
         raise HTTPException(400, f"Failed to extract features: {e}") from e

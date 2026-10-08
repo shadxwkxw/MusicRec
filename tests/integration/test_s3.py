@@ -359,3 +359,30 @@ def test_s3_import_takes_artist_and_title_from_key(s3):
         "music/Heronwater - Мяу.mp3": ("Heronwater", "Мяу"),
         "music/sub/untitled.mp3": ("Catalog", "untitled"),
     }
+
+
+def test_upload_directory_skips_tracks_already_in_bucket(s3, tmp_path):
+    import unicodedata
+
+    from recommender.application.migrate_s3 import upload_directory
+
+    s3.put_object(
+        Bucket=BUCKET, Key="uploads/0b6f1d2e-1111-4222-8333-944455556666_A - One.mp3", Body=b"x"
+    )
+    s3.put_object(Bucket=BUCKET, Key="music/Album/B - Два.mp3", Body=b"x")
+    folder = tmp_path / "new"
+    (folder / "Album 1").mkdir(parents=True)
+    (folder / "Album 2").mkdir()
+    (folder / "A - One.mp3").write_bytes(b"dup of upload")
+    nfd = unicodedata.normalize("NFD", "B - Два.mp3")  # «й/ё»-подобные имена с macOS
+    (folder / "Album 1" / nfd).write_bytes(b"dup of catalog")
+    (folder / "Album 1" / "C - Йога.mp3").write_bytes(b"new")
+    (folder / "Album 2" / "C - Йога.mp3").write_bytes(b"same track, other album")
+    (folder / "Album 2" / "a - ONE.mp3").write_bytes(b"same as upload, other case")
+    (folder / "Album 1" / "cover.jpg").write_bytes(b"not audio")
+
+    result = upload_directory(folder, "music/")
+
+    assert result.uploaded == ["music/Album 1/C - Йога.mp3"]
+    assert len(result.duplicates) == 4
+    assert _keys(s3, "music/") == {"music/Album/B - Два.mp3", "music/Album 1/C - Йога.mp3"}

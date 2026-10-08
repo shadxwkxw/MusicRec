@@ -2,7 +2,8 @@
 
 run_batch_import принимает готовый список треков с метаданными (например из
 датасета), run_batch_extract и s3_import_items строят его по директории или
-префиксу S3. Уже загруженные треки пропускаются по полю filename. Признаки
+префиксу S3. Жанр, если не задан, берётся из тегов файла (tags.py). Уже
+загруженные треки пропускаются по полю filename. Признаки
 можно считать в нескольких процессах (workers): это самая долгая часть
 импорта. Файлы из S3 скачиваются во временную папку и удаляются после расчёта.
 """
@@ -21,6 +22,7 @@ from recommender.infrastructure.data_processing.extract import (
     extract_features,
     features_to_bytes,
 )
+from recommender.infrastructure.data_processing.tags import read_tags
 from recommender.infrastructure.storage.audio_store import (
     AUDIO_EXTENSIONS,
     configured_s3_store,
@@ -46,17 +48,20 @@ class BatchExtractResult:
     failed: list[tuple[str, str]] = field(default_factory=list)  # (filename, error)
 
 
-def _extract(location: str) -> tuple[bytes, float] | str:
-    """Признаки и длительность, либо текст ошибки (исключения из процессов не тащим)."""
+Extracted = tuple[bytes, float, str | None]  # признаки, длительность, жанр из тегов
+
+
+def _extract(location: str) -> Extracted | str:
+    """Признаки, длительность и жанр, либо текст ошибки (исключения из процессов не тащим)."""
     try:
         with store_for(location).local_copy(location) as path:
             features = extract_features(path)
-            return features_to_bytes(features), get_duration(path)
+            return features_to_bytes(features), get_duration(path), read_tags(path).genre
     except Exception as e:
         return f"{type(e).__name__}: {e}"
 
 
-def _extract_all(paths: list[str], workers: int) -> Iterator[tuple[bytes, float] | str]:
+def _extract_all(paths: list[str], workers: int) -> Iterator[Extracted | str]:
     if workers <= 1:
         yield from map(_extract, paths)
         return
@@ -97,13 +102,13 @@ async def run_batch_import(
         if isinstance(result, str):
             stats.failed.append((item.filename, result))
         else:
-            vector, duration = result
+            vector, duration, tag_genre = result
             db.add(
                 TrackORM(
                     id=str(uuid.uuid4()),
                     title=item.title,
                     artist=item.artist,
-                    genre=item.genre,
+                    genre=item.genre or tag_genre,
                     filename=item.filename,
                     audio_path=str(item.path),
                     duration=duration,

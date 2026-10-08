@@ -10,6 +10,7 @@ Subcommands:
     evaluate   — оценить текущий индекс на отложенных лайках против бейзлайнов
     recommend  — precompute top-N похожих для всех треков, выгрузить в файл или S3
     migrate-s3 — перенести аудио из папки загрузок, индекс и выгрузки в S3
+    upload-s3  — залить папку с новой музыкой в S3 (без дублей), дальше import-s3
 
 rebuild и tune пишут индекс на диск; запущенный online-сервис подхватит его
 после POST /index/reload.
@@ -24,6 +25,7 @@ Examples:
     python services/batch/main.py recommend --output artifacts/recs.parquet --top-n 20
     python services/batch/main.py recommend --output s3://music/artifacts/recs.parquet
     python services/batch/main.py migrate-s3 --delete-local
+    python services/batch/main.py upload-s3 --dir musicnew --prefix music/
 """
 
 import argparse
@@ -39,7 +41,12 @@ from recommender.application.batch_extract import (
 )
 from recommender.application.batch_recommend import run_batch_recommend
 from recommender.application.index.build_index import NoTracksError, rebuild_index
-from recommender.application.migrate_s3 import migrate_artifacts, migrate_audio, migrate_index
+from recommender.application.migrate_s3 import (
+    migrate_artifacts,
+    migrate_audio,
+    migrate_index,
+    upload_directory,
+)
 from recommender.application.training.evaluation import evaluate_saved_index
 from recommender.application.training.tune_recommender import (
     create_tuning_run,
@@ -263,6 +270,21 @@ async def _migrate_s3(args: argparse.Namespace) -> None:
     )
 
 
+async def _upload_s3(args: argparse.Namespace) -> None:
+    if settings.storage_backend != "s3":
+        raise SystemExit("Set AUDIO_STORAGE=s3 and S3_BUCKET before upload-s3")
+    result = upload_directory(Path(args.dir), args.prefix, workers=args.workers)
+    print(
+        f"Upload to s3://{settings.s3_bucket}/{args.prefix}: uploaded={len(result.uploaded)}, "
+        f"already in bucket={len(result.duplicates)}, failed={len(result.failed)}"
+    )
+    for path in result.duplicates:
+        print(f"  SKIP (already in bucket) {path}")
+    for path, err in result.failed:
+        print(f"  FAIL {path}: {err}")
+    print(f"Next: import-s3 --prefix {args.prefix}, embed, rebuild")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Recommender batch service")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -324,6 +346,12 @@ def main() -> None:
         "--artifacts-dir", default="artifacts", help="Folder with recommend outputs"
     )
     p_migrate.set_defaults(func=_migrate_s3)
+
+    p_upload = sub.add_parser("upload-s3", help="Upload a folder of new music to S3, skip known")
+    p_upload.add_argument("--dir", required=True, help="Local folder (searched recursively)")
+    p_upload.add_argument("--prefix", default="music/", help="Key prefix in storage.s3_bucket")
+    p_upload.add_argument("--workers", type=int, default=8, help="Parallel uploads")
+    p_upload.set_defaults(func=_upload_s3)
 
     args = parser.parse_args()
     asyncio.run(args.func(args))
