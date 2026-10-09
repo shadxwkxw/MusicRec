@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from recommender.application.collaborative import co_like_strength, load_user_likes
 from recommender.application.features import check_index_source, load_vectors
+from recommender.application.visibility import hidden_track_ids
 from recommender.config import settings
 from recommender.infrastructure.storage.artifacts import load_current
 from recommender.infrastructure.storage.audio_store import is_s3, upload_file
@@ -55,15 +56,22 @@ async def run_batch_recommend(
         raise RuntimeError(f"No tracks with {settings.feature_source} features in database")
 
     user_likes = await load_user_likes(db) if use_likes else {}
+    hidden = await hidden_track_ids(db, engine)  # скрытые — ни в строках, ни в рекомендациях
 
     rows: list[tuple[str, int, str, float]] = []
     for track_id, features in vectors.items():
+        if track_id in hidden:
+            continue
         if normalizer.is_fitted:
             features = normalizer.transform(features).flatten()
 
         boost = co_like_strength(track_id, user_likes) if use_likes else None
         recs = engine.recommend(
-            features, limit=top_n, exclude_ids={track_id}, like_boost=boost or None
+            features,
+            limit=top_n,
+            exclude_ids={track_id},
+            like_boost=boost or None,
+            hidden_ids=set(hidden),
         )
         for rank, rec in enumerate(recs, start=1):
             rows.append((track_id, rank, rec.track_id, round(rec.score, 6)))
@@ -79,7 +87,7 @@ async def run_batch_recommend(
         _write_output(rows, output_path)
 
     return BatchRecommendResult(
-        tracks_scored=len(vectors),
+        tracks_scored=len(vectors) - len(hidden & vectors.keys()),
         output_path=output_path,
     )
 

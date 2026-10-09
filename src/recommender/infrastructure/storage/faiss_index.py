@@ -59,6 +59,7 @@ class FaissRecommender(Recommender):
         limit: int = settings.default_rec_limit,
         exclude_ids: set[str] | None = None,
         like_boost: dict[str, float] | None = None,
+        hidden_ids: set[str] | None = None,
     ) -> list[Recommendation]:
         if self.index.ntotal == 0:
             return []
@@ -71,19 +72,26 @@ class FaissRecommender(Recommender):
         # оказаться ближайшими. При like_boost сканируем весь индекс — иначе
         # сильный буст не поднимет трек, который не попал в топ-K поиска.
         exclude_ids = exclude_ids or set()
+        hidden_ids = hidden_ids or set()
+        skipped = len(exclude_ids) + len(hidden_ids)
         search_k = (
             self.index.ntotal
             if like_boost
-            else min(limit * settings.candidate_multiplier + len(exclude_ids), self.index.ntotal)
+            else min(limit * settings.candidate_multiplier + skipped, self.index.ntotal)
         )
         distances, indices = self.index.search(query, search_k)
 
-        candidates = [
+        found = [
             (self.track_ids[idx], float(dist))
             for dist, idx in zip(distances[0], indices[0], strict=True)
             if 0 <= idx < len(self.track_ids) and self.track_ids[idx] not in exclude_ids
         ]
-        scale = self._boost_scale([s for _, s in candidates]) if like_boost else 0.0
+        candidates = [(tid, score) for tid, score in found if tid not in hidden_ids]
+        scale = (
+            self._boost_scale([s for _, s in candidates], [s for _, s in found])
+            if like_boost
+            else 0.0
+        )
 
         results: list[Recommendation] = []
         for track_id, score in candidates:
@@ -97,17 +105,21 @@ class FaissRecommender(Recommender):
         results.sort(key=lambda r: r.score, reverse=(self.metric == "cosine"))
         return results[:limit]
 
-    def _boost_scale(self, scores: list[float]) -> float:
-        """Разрыв между ближайшим и медианным кандидатом: единица измерения буста.
+    def _boost_scale(self, candidates: list[float], everything: list[float]) -> float:
+        """Разрыв между ближайшим кандидатом и типичным треком: единица измерения буста.
 
         Масштаб скоров зависит от метрики, нормализации и весов признаков
         (для L2 это квадраты расстояний, десятки и сотни), поэтому вес буста
         задаётся в долях этого разрыва, а не в абсолютных единицах.
+
+        Ближайший — среди кандидатов, типичный — медиана с учётом скрытых треков
+        (hidden_ids): иначе скрытые источники (тысячи далёких треков FMA)
+        поднимали медиану и ослабляли буст в разы.
         """
-        if not scores:
+        if not candidates:
             return 0.0
-        best = max(scores) if self.metric == "cosine" else min(scores)
-        gap = abs(float(np.median(scores)) - best)
+        best = max(candidates) if self.metric == "cosine" else min(candidates)
+        gap = abs(float(np.median(everything)) - best)
         return gap if gap > 0 else 1.0
 
     def remove_tracks(self, track_ids: set[str]) -> int:

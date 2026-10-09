@@ -82,6 +82,7 @@ class Settings(BaseModel):
     # Recommendation
     default_rec_limit: int = Field(ge=1)
     candidate_multiplier: int = Field(ge=1)
+    hidden_sources: list[str]
     # Персональные рекомендации
     user_max_likes: int = Field(ge=1)
     user_max_interests: int = Field(ge=1)
@@ -226,6 +227,11 @@ def _build_settings(raw: dict) -> Settings:
         index_keep_versions=raw["index"]["keep_versions"],
         default_rec_limit=raw["recommendation"]["default_limit"],
         candidate_multiplier=raw["recommendation"]["candidate_multiplier"],
+        hidden_sources=[
+            s.strip()
+            for s in str(raw["recommendation"]["hidden_sources"] or "").split(",")
+            if s.strip()
+        ],
         user_max_likes=raw["user_recommendation"]["max_likes"],
         user_max_interests=raw["user_recommendation"]["max_interests"],
         user_min_likes_per_interest=raw["user_recommendation"]["min_likes_per_interest"],

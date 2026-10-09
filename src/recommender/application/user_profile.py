@@ -95,12 +95,15 @@ def interest_candidates(
     limit: int,
     exclude_ids: set[str],
     like_boost: dict[str, float] | None = None,
+    hidden_ids: set[str] | None = None,
 ) -> InterestCandidates:
     """Поиск по нормализованным векторам лайков (строки vectors)."""
     pool = limit * settings.candidate_multiplier * 2  # с запасом на лимит по артистам
 
     def search(query: np.ndarray) -> list[Recommendation]:
-        return engine.recommend(query, limit=pool, exclude_ids=exclude_ids, like_boost=like_boost)
+        return engine.recommend(
+            query, limit=pool, exclude_ids=exclude_ids, like_boost=like_boost, hidden_ids=hidden_ids
+        )
 
     groups = interest_groups(vectors)
     overall = search(vectors.mean(axis=0))

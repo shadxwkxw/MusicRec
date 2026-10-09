@@ -46,6 +46,7 @@ def load_fma_items(root: Path, subset: str = "small") -> list[ImportItem]:
             ImportItem(
                 path=path,
                 filename=f"fma_{name}.mp3",
+                source="fma",
                 title=_text(row[("track", "title")], f"FMA {name}"),
                 artist=_text(row[("artist", "name")], "Unknown"),
                 genre=None if pd.isna(genre) else str(genre),

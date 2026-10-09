@@ -332,6 +332,17 @@
             "title": "Indexed",
             "type": "boolean"
           },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
           "title": {
             "title": "Title",
             "type": "string"

@@ -48,6 +48,9 @@ class TrackORM(Base):
     genre = Column(String, nullable=True)
     filename = Column(String, nullable=False)
     audio_path = Column(String, nullable=True)  # где лежит аудио: нужно для пересчёта признаков
+    # Откуда трек: upload (API), import (папка, S3), fma (датасет). Скрытые источники
+    # (recommendation.hidden_sources) не попадают в выдачу, но остаются для тюнинга
+    source = Column(String, nullable=False, default="import", server_default="import", index=True)
     duration = Column(Float, nullable=True)
     feature_vector = Column(LargeBinary, nullable=True)  # numpy bytes
     created_at = Column(DateTime, default=utcnow)

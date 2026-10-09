@@ -107,3 +107,27 @@ async def test_duplicate_likes_are_merged_by_unique_migration(fresh_db):
         rows = (await conn.execute(text("SELECT id, user_id FROM likes ORDER BY id"))).all()
 
     assert [(i, u) for i, u in rows] == [(1, "u1"), (4, "u2")]  # остаётся самый ранний
+
+
+async def test_source_is_backfilled_by_migration(fresh_db):
+    async with fresh_db.begin() as conn:
+        await conn.run_sync(_alembic, "upgrade", "0005")
+        for track_id, filename, path in [
+            ("f", "fma_000002.mp3", "data/fma/000/000002.mp3"),
+            ("u", "0028bbab-f560-47f3-9e4a-98991f312d31_Song.mp3", "data/audio/x.mp3"),
+            ("s", "x.mp3", "s3://music/uploads/0028bbab-f560-47f3-9e4a-98991f312d31_x.mp3"),
+            ("i", "music/A - B.mp3", "s3://music/music/A - B.mp3"),
+            ("l", "local_song.mp3", None),
+        ]:
+            await conn.execute(
+                text(
+                    "INSERT INTO tracks (id, title, filename, audio_path) VALUES (:i, 't', :f, :p)"
+                ),
+                {"i": track_id, "f": filename, "p": path},
+            )
+
+    async with fresh_db.begin() as conn:
+        await conn.run_sync(_alembic, "upgrade", "0006")
+        rows = dict((await conn.execute(text("SELECT id, source FROM tracks"))).all())
+
+    assert rows == {"f": "fma", "u": "upload", "s": "upload", "i": "import", "l": "import"}

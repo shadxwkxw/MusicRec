@@ -13,6 +13,8 @@ class TrackResponse(BaseModel):
     duration: float | None = None
     created_at: datetime
     indexed: bool = True
+    source: str | None = None
+    """upload (через API), import (папка, S3) или fma; скрытые источники — см. hidden_sources."""
     """False — трек в БД, но в поисковом индексе ещё нет. Вызови /index/rebuild."""
 
 

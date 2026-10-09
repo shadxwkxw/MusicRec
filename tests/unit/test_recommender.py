@@ -622,3 +622,27 @@ class TestEnvFile:
         monkeypatch.setenv("ENV_FILE", str(tmp_path / "nope.env"))
 
         assert load_env_file() is None
+
+
+def test_boost_strength_does_not_depend_on_excluded_tracks():
+    """Скрытые далёкие треки (FMA) не должны ослаблять буст лайков у оставшихся."""
+    import numpy as np
+
+    from recommender.infrastructure.storage.faiss_index import FaissRecommender
+
+    rng = np.random.default_rng(0)
+    near = np.array([[1.0, 0.05], [0.9, 0.4]], dtype=np.float32)  # a ближе, b чуть дальше
+    far = np.column_stack([-np.ones(200), rng.normal(0, 0.3, 200)]).astype(np.float32)
+    engine = FaissRecommender(dimension=2, metric="cosine", boost_weight=0.5)
+    engine.add_tracks(["a", "b"] + [f"far{i}" for i in range(200)], np.vstack([near, far]))
+    query = np.array([1.0, 0.0], dtype=np.float32)
+    boost = {"b": 1.0}
+
+    shown = [r.track_id for r in engine.recommend(query, limit=2, like_boost=boost)]
+    hidden = {f"far{i}" for i in range(200)}
+    without_far = [
+        r.track_id for r in engine.recommend(query, limit=2, like_boost=boost, hidden_ids=hidden)
+    ]
+
+    assert shown == ["b", "a"]  # буст лайков поднял b
+    assert without_far == shown

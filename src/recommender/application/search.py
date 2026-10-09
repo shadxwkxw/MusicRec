@@ -40,6 +40,7 @@ def search_tracks(
     normalizer: FeatureNormalizer,
     encoder: TextEncoder,
     limit: int = settings.default_rec_limit,
+    hidden_ids: set[str] | None = None,
 ) -> list[Recommendation]:
     expected = f"embedding:{encoder.model_name}"
     if engine.source != expected:
@@ -49,4 +50,4 @@ def search_tracks(
     vector = query_vector(encoder, query)
     if normalizer.is_fitted:
         vector = normalizer.transform(vector).flatten()
-    return engine.recommend(vector, limit=limit)
+    return engine.recommend(vector, limit=limit, hidden_ids=hidden_ids)

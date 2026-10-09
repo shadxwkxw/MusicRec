@@ -38,6 +38,7 @@ class ImportItem:
     title: str
     artist: str
     genre: str | None = None
+    source: str = "import"  # fma для датасета, см. TrackORM.source
 
 
 @dataclass
@@ -109,6 +110,7 @@ async def run_batch_import(
                     title=item.title,
                     artist=item.artist,
                     genre=item.genre or tag_genre,
+                    source=item.source,
                     filename=item.filename,
                     audio_path=str(item.path),
                     duration=duration,

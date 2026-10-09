@@ -4,6 +4,8 @@
 - по треку (content-based + collaborative boost)
 - по пользователю (интересы из последних лайков + collaborative boost,
   см. user_profile.py; без лайков — популярные треки)
+
+Треки скрытых источников (visibility.py) в выдачу не попадают.
 """
 
 from dataclasses import dataclass
@@ -18,6 +20,7 @@ from recommender.application.collaborative import (
 )
 from recommender.application.features import load_vectors
 from recommender.application.user_profile import blend, interest_candidates
+from recommender.application.visibility import hidden_track_ids
 from recommender.config import settings
 from recommender.domain.artists import ArtistCap, artist_names, names_of
 from recommender.domain.models import Recommendation
@@ -59,11 +62,13 @@ async def recommend_by_track(
 
     like_boost = await compute_like_boost(track_id, db) if use_likes else None
 
+    hidden = await hidden_track_ids(db, engine)
     return engine.recommend(
         features,
         limit=limit,
         exclude_ids={track_id},
         like_boost=like_boost,
+        hidden_ids=set(hidden),
     )
 
 
@@ -94,13 +99,14 @@ async def recommend_for_user(
     all_liked = list(dict.fromkeys(row[0] for row in result.all()))
     recent = all_liked[: settings.user_max_likes]
 
+    hidden = await hidden_track_ids(db, engine)
     vectors_by_id = await load_vectors(db, recent)
     rows = [vectors_by_id[t] for t in recent if t in vectors_by_id]
     if not rows:
         if not settings.user_cold_start:
             raise NoLikedTracksError(user_id)
         return UserRecommendations(
-            await popular_tracks(db, engine, limit, exclude_ids=set(all_liked)), "popular"
+            await popular_tracks(db, engine, limit, exclude_ids=set(all_liked) | hidden), "popular"
         )
 
     vectors = np.stack(rows)
@@ -109,7 +115,12 @@ async def recommend_for_user(
     like_boost = await compute_user_like_boost(user_id, db) if use_likes else None
 
     candidates = interest_candidates(
-        engine, vectors, limit, exclude_ids=set(all_liked), like_boost=like_boost or None
+        engine,
+        vectors,
+        limit,
+        exclude_ids=set(all_liked),
+        like_boost=like_boost or None,
+        hidden_ids=set(hidden),
     )
     artists = await _artists(db, candidates.track_ids | set(recent))
     liked_artists = names_of(artists, recent)

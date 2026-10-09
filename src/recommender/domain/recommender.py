@@ -32,6 +32,7 @@ class Recommender(ABC):
         limit: int = 10,
         exclude_ids: set[str] | None = None,
         like_boost: dict[str, float] | None = None,
+        hidden_ids: set[str] | None = None,
     ) -> list[Recommendation]:
         """Вернуть топ-N похожих треков.
 
@@ -41,6 +42,9 @@ class Recommender(ABC):
             exclude_ids: треки, которые нужно исключить (обычно сам query)
             like_boost: {track_id: сила co-like сигнала в [0, 1]}; вес и
                 направление надбавки определяет реализация
+            hidden_ids: треки, которых нет в выдаче, но которые остаются частью
+                каталога (скрытые источники): в отличие от exclude_ids они
+                учитываются, когда реализация оценивает типичный трек
         """
 
     @abstractmethod

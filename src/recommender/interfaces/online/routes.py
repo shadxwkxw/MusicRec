@@ -47,6 +47,7 @@ from recommender.application.training.tune_recommender import (
     create_tuning_run,
     execute_tuning_run,
 )
+from recommender.application.visibility import hidden_track_ids
 from recommender.config import settings
 from recommender.infrastructure.data_processing.audio import get_duration
 from recommender.infrastructure.data_processing.extract import (
@@ -178,6 +179,7 @@ async def upload_track(
         genre=genre,
         filename=filename,
         audio_path=audio_path,
+        source="upload",
         duration=duration,
         feature_vector=features_to_bytes(features),
     )
@@ -206,6 +208,7 @@ async def upload_track(
         duration=duration,
         created_at=track.created_at,
         indexed=indexed,
+        source="upload",
     )
 
 
@@ -218,6 +221,7 @@ def _to_response(track: TrackORM, indexed_ids: set[str]) -> TrackResponse:
         duration=track.duration,
         created_at=track.created_at,
         indexed=track.id in indexed_ids,
+        source=track.source,
     )
 
 
@@ -347,8 +351,14 @@ async def search(
 ):
     """Треки по текстовому описанию: «calm acoustic folk», «energetic hip-hop beat»."""
     try:
+        engine = _engine(request)
         recs = search_tracks(
-            q, _engine(request), _normalizer(request), _text_encoder(request), limit=limit
+            q,
+            engine,
+            _normalizer(request),
+            _text_encoder(request),
+            limit=limit,
+            hidden_ids=set(await hidden_track_ids(db, engine)),
         )
     except TextSearchNotSupportedError as e:
         raise HTTPException(409, f"{e} (set FEATURE_SOURCE=embedding and rebuild)") from e
