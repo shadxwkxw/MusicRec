@@ -102,9 +102,13 @@ async def test_evaluate_saved_index_reports_genres(api, audio_files, tmp_path):
 
     genre = report["genre"]
     assert genre["all"]["tracks"] == 6
-    assert set(genre) == {"all", "Rock", "Jazz"}
+    assert set(genre) == {"all", "macro", "Rock", "Jazz"}
     # 2 других трека того же жанра из 5 других
     assert genre["Rock"]["random@10"] == pytest.approx(2 / 5)
+    # macro — среднее по жанрам, а не по трекам
+    assert genre["macro"]["filtered@10"] == pytest.approx(
+        (genre["Rock"]["filtered@10"] + genre["Jazz"]["filtered@10"]) / 2
+    )
     assert report["holdout"] == {}  # лайков нет
 
 

@@ -181,7 +181,13 @@ async def _tune(args: argparse.Namespace) -> None:
             raise SystemExit(f"Tuning run {run_id} failed: {e}") from e
     train = ", ".join(f"{name}={value:.3f}" for name, value in result["train"].items())
     print(
-        f"Tuning run {run_id} done ({result['objective']} objective): "
+        f"Tuning run {run_id} done ({result['objective']} objective"
+        + (
+            f", {result['genre_average']} over the {result['genre_catalog']} catalog"
+            if result["objective"] == "genre"
+            else ""
+        )
+        + "): "
         f"best_score={result['best_score']:.3f} (train: {train})"
     )
     params = result["best_params"]

@@ -11,7 +11,9 @@
 - holdout_queries — итоговая оценка на отложенных лайках, которых тюнинг не видел.
 
 Отдельно genre_report: для треков с жанром (например из FMA) — доля того же
-жанра среди k ближайших. Лайки для неё не нужны.
+жанра среди k ближайших. Лайки для неё не нужны. Строка macro — среднее по
+жанрам: при перекосе каталога (три четверти хип-хопа) среднее по трекам
+награждает «всегда хип-хоп», а macro — умение различать все жанры.
 """
 
 import random
@@ -37,6 +39,7 @@ from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import TrackORM
 
 PATHS = ("track", "user")
+MACRO_MIN_TRACKS = 3  # жанры с меньшим числом запросов в macro не входят: слишком шумно
 UserLikes = Mapping[str, set[str]]
 
 
@@ -108,17 +111,34 @@ def holdout_queries(train: UserLikes, test: UserLikes, known: set[str]) -> list[
 
 
 def split_by_artist(
-    track_ids: Collection[str], artists: Mapping[str, str], test_fraction: float, seed: int
+    track_ids: Collection[str],
+    artists: Mapping[str, str],
+    test_fraction: float,
+    seed: int,
+    genres: Mapping[str, str | None] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Отложить долю артистов целиком: треки одного артиста не попадут по обе стороны.
 
     Артисты, связанные коллаборациями (Lizer и «LIZER, FLESH»), — одна группа.
+    С genres доля откладывается внутри каждого жанра (жанр группы — самый
+    частый у её треков): иначе при перекосе каталога редкие жанры целиком
+    уходят в одну сторону и проверка их не видит. В каждом жанре хотя бы одна
+    группа остаётся для подбора.
     """
     groups = artist_groups({t: artists.get(t, "") for t in track_ids})
-    names = sorted(set(groups.values()))
-    random.Random(seed).shuffle(names)
-    n_test = min(len(names) - 1, round(len(names) * test_fraction)) if len(names) > 1 else 0
-    test_groups = set(names[:n_test])
+    strata: dict[str | None, set[str]] = {}
+    for group in set(groups.values()):
+        members = [t for t in track_ids if groups[t] == group]
+        votes = Counter(genres.get(t) for t in members) if genres else Counter()
+        strata.setdefault(votes.most_common(1)[0][0] if votes else None, set()).add(group)
+    rng = random.Random(seed)
+    test_groups: set[str] = set()
+    for stratum in sorted(strata, key=str):
+        names = sorted(strata[stratum])
+        rng.shuffle(names)
+        if len(names) > 1:
+            n_test = min(len(names) - 1, max(1, round(len(names) * test_fraction)))
+            test_groups.update(names[:n_test] if test_fraction > 0 else [])
     tune = sorted(t for t in track_ids if groups[t] not in test_groups)
     test = sorted(t for t in track_ids if groups[t] in test_groups)
     return tune, test
@@ -278,44 +298,53 @@ def genre_report(
     artists: Mapping[str, str],
     k: int | None = None,
     query_ids: Collection[str] | None = None,
+    candidates: Collection[str] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Доля того же жанра среди k ближайших (без буста) против случайного уровня.
 
     filtered — то же, но треки того же артиста исключены из соседей (artist
     filter): иначе метрика отчасти меряет «нашёл других треков артиста».
     Случайный уровень считается точно для каждого трека. query_ids ограничивает
-    запросы (кандидаты — весь индекс). Строки: all и каждый жанр. Пусто, если
-    меток нет.
+    запросы, candidates — среди каких треков искать соседей (по умолчанию весь
+    индекс; например, только видимые в выдаче). Строки: all (среднее по
+    трекам), macro (по жанрам) и каждый жанр. Пусто, если меток нет.
     """
     k = k or settings.tuning_eval_k
     queries = id_to_idx if query_ids is None else [t for t in query_ids if t in id_to_idx]
     labeled = [t for t in queries if genres.get(t)]
     if not labeled:
         return {}
-    n_tracks = len(id_to_idx)
-    genre_size = Counter(genres[t] for t in id_to_idx if genres.get(t))
+    indexed = set(engine.track_ids) & set(id_to_idx)
+    pool = indexed if candidates is None else set(candidates) & indexed
+    outside = set(engine.track_ids) - pool  # в индексе, но не кандидаты — как скрытые
+    n_tracks = len(pool)
+    genre_size = Counter(genres[t] for t in pool if genres.get(t))
     # «Тот же артист» — группа по общим именам, включая соавторов (domain/artists.py)
     groups = artist_groups({t: artists.get(t, "") for t in id_to_idx})
     by_artist: dict[str, set[str]] = {}
-    for track_id in id_to_idx:
+    for track_id in pool:
         by_artist.setdefault(groups[track_id], set()).add(track_id)
 
     def same_share(track_id: str, exclude: set[str]) -> float:
-        recs = engine.recommend(normalized[id_to_idx[track_id]], limit=k, exclude_ids=exclude)
+        recs = engine.recommend(
+            normalized[id_to_idx[track_id]], limit=k, exclude_ids=exclude, hidden_ids=outside
+        )
         return sum(genres.get(r.track_id) == genres[track_id] for r in recs) / k
 
     by_genre: dict[str, list[tuple[float, float, float, float]]] = {}
     for track_id in labeled:
         genre = genres[track_id]
         assert genre is not None
-        artist_tracks = by_artist[groups[track_id]]
-        artist_same_genre = sum(genres.get(t) == genre for t in artist_tracks)
+        artist_tracks = by_artist.get(groups[track_id], set()) | {track_id}
+        artist_same_genre = sum(genres.get(t) == genre for t in artist_tracks & pool)
+        in_pool = track_id in pool
         by_genre.setdefault(genre, []).append(
             (
                 same_share(track_id, {track_id}),
-                (genre_size[genre] - 1) / (n_tracks - 1),
+                (genre_size[genre] - in_pool) / max(n_tracks - in_pool, 1),
                 same_share(track_id, artist_tracks),
-                (genre_size[genre] - artist_same_genre) / max(n_tracks - len(artist_tracks), 1),
+                (genre_size[genre] - artist_same_genre)
+                / max(n_tracks - len(artist_tracks & pool), 1),
             )
         )
 
@@ -329,10 +358,44 @@ def genre_report(
             "tracks": float(len(values)),
         }
 
+    per_genre = {g: row(by_genre[g]) for g in sorted(by_genre, key=lambda g: -len(by_genre[g]))}
     report = {"all": row([v for values in by_genre.values() for v in values])}
-    for genre in sorted(by_genre, key=lambda g: -len(by_genre[g])):
-        report[genre] = row(by_genre[genre])
+    counted = [r for r in per_genre.values() if r["tracks"] >= MACRO_MIN_TRACKS]
+    if counted:
+        report["macro"] = {
+            key: (
+                float(sum(r["tracks"] for r in counted))
+                if key == "tracks"
+                else sum(r[key] for r in counted) / len(counted)
+            )
+            for key in counted[0]
+        }
+    report.update(per_genre)
     return report
+
+
+def genre_catalog(tracks: Sequence[TrackORM]) -> tuple[dict[str, str], set[str], str]:
+    """Жанры и кандидаты для жанровой оценки по tuning.genre_catalog.
+
+    visible — треки, которые видят пользователи (без скрытых источников), если
+    среди них хотя бы tuning.min_genre_tracks с жанром; иначе весь каталог.
+    Возвращает ({track_id: жанр}, кандидаты, какой каталог взят).
+    """
+    everything = {t.id for t in tracks}
+    all_genres = {t.id: t.genre for t in tracks if t.genre}
+    if settings.tuning_genre_catalog == "visible":
+        hidden = set(settings.hidden_sources)
+        visible = {t.id for t in tracks if t.source not in hidden}
+        genres = {t: g for t, g in all_genres.items() if t in visible}
+        if len(genres) >= settings.tuning_min_genre_tracks:
+            return genres, visible, "visible"
+    return all_genres, everything, "all"
+
+
+def genre_score(report: dict[str, dict[str, float]], k: int) -> float:
+    """Целевая метрика жанровой оценки: filtered@k, среднее по жанрам или по трекам."""
+    row = "macro" if settings.tuning_genre_average == "macro" and "macro" in report else "all"
+    return report[row][f"filtered@{k}"]
 
 
 async def evaluate_saved_index(db: AsyncSession) -> dict[str, dict[str, dict[str, float]]]:
@@ -347,6 +410,7 @@ async def evaluate_saved_index(db: AsyncSession) -> dict[str, dict[str, dict[str
     normalized = normalizer.transform(np.stack([vectors[t] for t in track_ids]))
 
     id_to_idx = {t: i for i, t in enumerate(track_ids)}
+    genres, candidates, _ = genre_catalog([tracks[t] for t in track_ids])
     train, test = split_likes(
         await load_user_likes(db), settings.tuning_test_fraction, settings.tuning_seed
     )
@@ -363,7 +427,9 @@ async def evaluate_saved_index(db: AsyncSession) -> dict[str, dict[str, dict[str
             engine,
             normalized,
             id_to_idx,
-            {t: tracks[t].genre for t in track_ids},
+            genres,
             {t: tracks[t].artist or "" for t in track_ids},
+            query_ids=list(genres),
+            candidates=candidates,
         ),
     }

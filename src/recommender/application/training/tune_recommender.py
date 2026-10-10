@@ -6,7 +6,9 @@
 - вес коллаборативного бустинга.
 
 Цель подбора параметров признаков (tuning.objective):
-- genre — доля того же жанра среди k ближайших с artist filter. Артисты
+- genre — доля того же жанра среди k ближайших с artist filter, по умолчанию
+  среднее по жанрам (tuning.genre_average) на видимом каталоге — без скрытых
+  источников вроде FMA (tuning.genre_catalog). Артисты
   делятся на подбор и проверку (tuning.test_fraction), индекс в каждой попытке
   строится только из треков подбора. Вес буста жанрами не оценить, поэтому
   он подбирается вторым шагом по лайкам при найденных параметрах признаков
@@ -32,7 +34,9 @@ from recommender.application.collaborative import load_user_likes
 from recommender.application.features import load_vectors, uses_embeddings
 from recommender.application.training.evaluation import (
     evaluate,
+    genre_catalog,
     genre_report,
+    genre_score,
     holdout_report,
     leave_one_out_queries,
     objective_score,
@@ -91,7 +95,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     groups = {} if uses_embeddings() else FEATURE_GROUPS
     id_to_idx = {tid: i for i, tid in enumerate(track_ids)}
     artists = {t.id: t.artist or "" for t in tracks}
-    genres = {t.id: t.genre for t in tracks if t.genre}
+    genres, candidates, catalog = genre_catalog(tracks)
     k = settings.tuning_eval_k
 
     train, test = split_likes(
@@ -106,7 +110,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     if mode == "genre" and len(set(genres.values())) < 2:
         raise ValueError("Genre objective needs tracks of at least 2 genres")
     tune_ids, test_ids = split_by_artist(
-        list(genres), artists, settings.tuning_test_fraction, settings.tuning_seed
+        list(genres), artists, settings.tuning_test_fraction, settings.tuning_seed, genres
     )
 
     run = await db.get(AutoMLRunORM, run_id)
@@ -153,9 +157,18 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
             return objective_score(metrics)
 
         _, normalized, engine = build(params, only=tune_ids)
-        report = genre_report(engine, normalized, id_to_idx, genres, artists, query_ids=tune_ids)
-        trial.set_user_attr("metrics", report["all"])
-        return report["all"][f"filtered@{k}"]
+        report = genre_report(
+            engine, normalized, id_to_idx, genres, artists, query_ids=tune_ids, candidates=tune_ids
+        )
+        score = genre_score(report, k)
+        trial.set_user_attr(
+            "metrics",
+            {
+                **report["all"],
+                "macro_filtered": report.get("macro", {}).get(f"filtered@{k}", score),
+            },
+        )
+        return score
 
     study = optuna.create_study(
         direction="maximize", sampler=optuna.samplers.TPESampler(seed=settings.tuning_seed)
@@ -174,11 +187,19 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
 
     metrics = {
         "objective": mode,
+        "genre_catalog": catalog,
+        "genre_average": settings.tuning_genre_average,
         "train": study.best_trial.user_attrs["metrics"],
         "holdout": holdout_report(engine, normalized, id_to_idx, artists, train, test),
         "test_likes": sum(len(t) for t in test.values()),
         "genre_test": genre_report(
-            engine, normalized, id_to_idx, genres, artists, query_ids=test_ids
+            engine,
+            normalized,
+            id_to_idx,
+            genres,
+            artists,
+            query_ids=test_ids,
+            candidates=candidates,
         ),
     }
 

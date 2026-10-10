@@ -92,6 +92,13 @@ tuning:
   # каталоге хотя бы min_genre_tracks треков с жанром, иначе likes
   objective: auto
   min_genre_tracks: 100
+  # На каких треках считать жанровую цель: visible — что видят пользователи (без
+  # recommendation.hidden_sources), если там хотя бы min_genre_tracks треков с жанром,
+  # иначе весь каталог; all — весь каталог (вместе с FMA)
+  genre_catalog: ${TUNING_GENRE_CATALOG:-visible}
+  # macro — среднее точности по жанрам (каждый жанр весит одинаково), micro — по трекам.
+  # При перекосе каталога micro награждает «всегда самый частый жанр»
+  genre_average: ${TUNING_GENRE_AVERAGE:-macro}
   test_fraction: 0.2         # доля лайков каждого пользователя (и артистов в режиме genre) в отложенной выборке
   seed: 42                   # seed разбиения и Optuna, чтобы результаты воспроизводились
 
