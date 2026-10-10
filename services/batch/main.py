@@ -11,6 +11,7 @@ Subcommands:
     recommend  — precompute top-N похожих для всех треков, выгрузить в файл или S3
     migrate-s3 — перенести аудио из папки загрузок, индекс и выгрузки в S3
     upload-s3  — залить папку с новой музыкой в S3 (без дублей), дальше import-s3
+    fill-genres — дописать жанр из тегов файла трекам без жанра
 
 rebuild и tune пишут индекс на диск; запущенный online-сервис подхватит его
 после POST /index/reload.
@@ -35,6 +36,7 @@ from pathlib import Path
 from recommender.application.batch_embed import count_missing_embeddings, run_batch_embed
 from recommender.application.batch_extract import (
     BatchExtractResult,
+    fill_genres_from_tags,
     run_batch_extract,
     run_batch_import,
     s3_import_items,
@@ -285,6 +287,21 @@ async def _upload_s3(args: argparse.Namespace) -> None:
     print(f"Next: import-s3 --prefix {args.prefix}, embed, rebuild")
 
 
+async def _fill_genres(args: argparse.Namespace) -> None:
+    def progress(done: int, total: int) -> None:
+        print(f"  {done}/{total}", flush=True)
+
+    await init_db()
+    async with async_session() as session:
+        result = await fill_genres_from_tags(session, args.source or None, progress=progress)
+    print(
+        f"Genres from tags: filled={result.filled}, no genre tag={result.no_tag}, "
+        f"audio missing={len(result.missing)}"
+    )
+    for location in result.missing:
+        print(f"  MISSING {location}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Recommender batch service")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -352,6 +369,12 @@ def main() -> None:
     p_upload.add_argument("--prefix", default="music/", help="Key prefix in storage.s3_bucket")
     p_upload.add_argument("--workers", type=int, default=8, help="Parallel uploads")
     p_upload.set_defaults(func=_upload_s3)
+
+    p_genres = sub.add_parser("fill-genres", help="Fill missing genres from audio file tags")
+    p_genres.add_argument(
+        "--source", action="append", help="Only these sources (upload, import, fma); repeatable"
+    )
+    p_genres.set_defaults(func=_fill_genres)
 
     args = parser.parse_args()
     asyncio.run(args.func(args))

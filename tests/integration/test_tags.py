@@ -88,3 +88,37 @@ async def test_api_upload_reads_genre_unless_given(api, audio_files, tmp_path):
 
     assert await upload(title="A") == "Pop"
     assert await upload(title="B", genre="Indie") == "Indie"
+
+
+async def test_fill_genres_from_tags(api, audio_files, tmp_path):
+    from recommender.application.batch_extract import fill_genres_from_tags
+
+    tagged = _tagged(audio_files[0], tmp_path / "rap.wav", genre="Рэп")
+    plain = tmp_path / "plain.wav"
+    shutil.copy(audio_files[1], plain)
+    rows = [
+        ("t1", str(tagged), None, "upload"),
+        ("t2", str(plain), None, "upload"),
+        ("t3", str(tmp_path / "gone.wav"), None, "upload"),
+        ("t4", str(tagged), "Indie", "upload"),  # жанр уже есть — не трогаем
+        ("t5", str(tagged), None, "fma"),  # другой источник
+    ]
+    async with api.sessions() as db:
+        for track_id, path, genre, source in rows:
+            db.add(
+                TrackORM(
+                    id=track_id,
+                    title=track_id,
+                    filename=f"{track_id}.wav",
+                    audio_path=path,
+                    genre=genre,
+                    source=source,
+                )
+            )
+        await db.commit()
+
+        result = await fill_genres_from_tags(db, sources=["upload"], chunk=2)
+        genres = dict((await db.execute(select(TrackORM.id, TrackORM.genre))).all())
+
+    assert (result.filled, result.no_tag, result.missing) == (1, 1, [str(tmp_path / "gone.wav")])
+    assert genres == {"t1": "Hip-Hop", "t2": None, "t3": None, "t4": "Indie", "t5": None}

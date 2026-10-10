@@ -9,7 +9,7 @@ run_batch_import принимает готовый список треков с 
 """
 
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from recommender.application.features import audio_path_of
 from recommender.infrastructure.data_processing.audio import get_duration
 from recommender.infrastructure.data_processing.extract import (
     extract_features,
@@ -26,6 +27,7 @@ from recommender.infrastructure.data_processing.tags import read_tags
 from recommender.infrastructure.storage.audio_store import (
     AUDIO_EXTENSIONS,
     configured_s3_store,
+    local_copies,
     store_for,
 )
 from recommender.infrastructure.storage.postgres import TrackORM, utcnow
@@ -171,3 +173,46 @@ def s3_import_items(prefix: str, default_artist: str = "Unknown") -> list[Import
         artist, title = artist_and_title(PurePosixPath(key).stem, default_artist)
         items.append(ImportItem(f"s3://{store.bucket}/{key}", key, title, artist))
     return items
+
+
+@dataclass
+class GenreFillResult:
+    filled: int = 0
+    no_tag: int = 0  # у файла нет тега жанра
+    missing: list[str] = field(default_factory=list)  # аудио не найдено
+
+
+async def fill_genres_from_tags(
+    db: AsyncSession,
+    sources: Collection[str] | None = None,
+    chunk: int = 32,
+    progress: Callable[[int, int], None] | None = None,
+) -> GenreFillResult:
+    """Дописать жанр из тегов файла трекам, у которых его нет (загружены до чтения тегов).
+
+    sources ограничивает источники (upload, import, fma). Аудио из S3
+    скачивается пачками во временную папку.
+    """
+    query = select(TrackORM).where(TrackORM.genre.is_(None)).order_by(TrackORM.id)
+    if sources:
+        query = query.where(TrackORM.source.in_(list(sources)))
+    tracks = (await db.execute(query)).scalars().all()
+    result = GenreFillResult()
+    for start in range(0, len(tracks), chunk):
+        batch = tracks[start : start + chunk]
+        locations = [audio_path_of(track) for track in batch]
+        with local_copies(locations) as copies:
+            for track, location, copy in zip(batch, locations, copies, strict=True):
+                if isinstance(copy, Exception):
+                    result.missing.append(location)
+                    continue
+                genre = read_tags(copy).genre
+                if genre:
+                    track.genre = genre
+                    result.filled += 1
+                else:
+                    result.no_tag += 1
+        await db.commit()
+        if progress:
+            progress(min(start + chunk, len(tracks)), len(tracks))
+    return result
