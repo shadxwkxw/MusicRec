@@ -24,6 +24,8 @@ from recommender.infrastructure.storage.postgres import LikeORM
         ("Song feat. Someone", "song"),
         ("Track [Official Video]", "track"),
         ("(I Just) Died In Your Arms", "i just died in your arms"),  # не хвост — оставляем
+        ("Apathy (1)", "apathy"),  # метка копии файла
+        ("Madam 2", "madam 2"),
     ],
 )
 def test_normalize_title(title, normalized):
@@ -49,6 +51,13 @@ def test_parse_txt_m3u_csv():
     assert parse_playlist("c.csv", with_header)[0] == [
         PlaylistEntry("A", "One"),
         PlaylistEntry("B", "Two"),
+    ]
+    exportify = (
+        "\ufeffTrack URI,Track Name,Album Name,Artist Name(s),Genres\n"
+        'spotify:track:1,"Force","Force","MiyaGi;Andy Panda;TumaniYO",""\n'
+    )
+    assert parse_playlist("e.csv", exportify)[0] == [
+        PlaylistEntry("MiyaGi;Andy Panda;TumaniYO", "Force")
     ]
     single = "A - One\nB - Two\n"
     assert parse_playlist("d.csv", single)[0] == [

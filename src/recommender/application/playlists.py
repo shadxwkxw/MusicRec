@@ -8,7 +8,8 @@ playlist:<имя> — продолжение плейлиста.
 Форматы файлов (по строке на трек):
 - .txt — «Артист - Название» (разделитель -, — или –);
 - .m3u / .m3u8 — #EXTINF:<сек>,Артист - Название или путь к файлу «…/Артист - Название.mp3»;
-- .csv — колонки artist и title, иначе первая колонка «Артист - Название».
+- .csv — колонки исполнителя и названия (artist/title, Exportify: «Artist Name(s)» и
+  «Track Name», соавторы через ;), иначе первая колонка «Артист - Название».
 
 Трек из плейлиста сопоставляется с каталогом, если совпадает название (без
 регистра, ё/е, знаков и хвостов вроде «(prod. by …)», «(feat. …)») и есть
@@ -33,10 +34,13 @@ from recommender.infrastructure.storage.postgres import LikeORM, TrackORM
 PLAYLIST_USER_PREFIX = "playlist:"
 PLAYLIST_SUFFIXES = {".txt", ".m3u", ".m3u8", ".csv"}
 
+_ARTIST_COLUMNS = ("artist", "artist name(s)", "artist name", "artists", "исполнитель")
+_TITLE_COLUMNS = ("title", "track name", "track", "name", "название", "трек")
 _DASH = re.compile(r"\s+[-—–]\s+")
 _TAIL = re.compile(
     r"[(\[][^)\]]*(?:prod|feat|ft\.|remix|version|edit|official|live)[^)\]]*[)\]]", re.I
 )
+_COPY_MARK = re.compile(r"\s*\(\d{1,2}\)\s*$")  # «Apathy (1)» — копия файла
 _FEAT_TAIL = re.compile(r"\s+(?:feat\.?|ft\.?)\s+.*$", re.I)
 _NON_WORD = re.compile(r"[\W_]+")  # «Syringe_» из имени файла = «Syringe?»
 
@@ -50,7 +54,7 @@ class PlaylistEntry:
 def normalize_title(title: str) -> str:
     """Название для сравнения: без регистра, ё/е, знаков и хвостов (prod., feat., remix)."""
     text = unicodedata.normalize("NFC", title).casefold().replace("ё", "е")
-    text = _TAIL.sub(" ", text)
+    text = _COPY_MARK.sub("", _TAIL.sub(" ", text))
     text = _FEAT_TAIL.sub("", text)
     return " ".join(_NON_WORD.sub(" ", text).split())
 
@@ -69,9 +73,10 @@ def parse_playlist(name: str, content: str) -> tuple[list[PlaylistEntry], list[s
     bad: list[str] = []
     if suffix == ".csv":
         rows = list(csv.reader(io.StringIO(content)))
-        header = [c.strip().casefold() for c in rows[0]] if rows else []
-        if "artist" in header and "title" in header:
-            a, t = header.index("artist"), header.index("title")
+        header = [c.strip().lstrip("\ufeff").casefold() for c in rows[0]] if rows else []
+        a = next((header.index(c) for c in _ARTIST_COLUMNS if c in header), None)
+        t = next((header.index(c) for c in _TITLE_COLUMNS if c in header), None)
+        if a is not None and t is not None:
             for row in rows[1:]:
                 if len(row) > max(a, t) and row[a].strip() and row[t].strip():
                     entries.append(PlaylistEntry(row[a].strip(), row[t].strip()))
