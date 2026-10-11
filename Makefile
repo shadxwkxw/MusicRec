@@ -1,7 +1,7 @@
 .PHONY: env install install-embeddings lock upgrade run test test-unit test-integration coverage smoke audit build \
         lint format typecheck clean e2e-compose openapi openapi-check \
         docker-build docker-up docker-down docker-logs \
-        batch-extract batch-import-s3 batch-migrate-s3 add-music batch-fill-genres batch-embed batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
+        batch-extract batch-import-s3 batch-migrate-s3 add-music batch-fill-genres batch-import-playlists batch-embed batch-rebuild batch-tune batch-evaluate batch-recommend index-reload \
         docker-batch-extract docker-batch-embed docker-batch-rebuild docker-batch-tune docker-batch-recommend \
         migrate migration db-copy fma-unpack fma-import \
         airflow-up airflow-down airflow-logs airflow-check
@@ -151,6 +151,11 @@ add-music:
 GENRE_SOURCES ?=
 batch-fill-genres:
 	$(PY) services/batch/main.py fill-genres $(GENRE_SOURCES)
+
+# Плейлисты как лайки (playlist:<имя файла>): make batch-import-playlists [PLAYLISTS=playlists]
+PLAYLISTS ?= playlists
+batch-import-playlists:
+	$(PY) services/batch/main.py import-playlists --dir "$(PLAYLISTS)"
 
 # Перенос в S3 (AUDIO_STORAGE=s3): аудио из data/audio, индекс, artifacts/*.parquet.
 # make batch-migrate-s3 DELETE_LOCAL=1 — удалить локальные копии аудио после переноса

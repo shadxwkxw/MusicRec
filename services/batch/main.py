@@ -12,6 +12,7 @@ Subcommands:
     migrate-s3 — перенести аудио из папки загрузок, индекс и выгрузки в S3
     upload-s3  — залить папку с новой музыкой в S3 (без дублей), дальше import-s3
     fill-genres — дописать жанр из тегов файла трекам без жанра
+    import-playlists — плейлисты как лайки пользователей playlist:<имя файла>
 
 rebuild и tune пишут индекс на диск; запущенный online-сервис подхватит его
 после POST /index/reload.
@@ -308,6 +309,27 @@ async def _fill_genres(args: argparse.Namespace) -> None:
         print(f"  MISSING {location}")
 
 
+async def _import_playlists(args: argparse.Namespace) -> None:
+    from recommender.application.playlists import import_playlists
+
+    await init_db()
+    async with async_session() as session:
+        results = await import_playlists(session, Path(args.dir))
+    if not results:
+        print(f"No playlists (.txt, .m3u, .m3u8, .csv) in {args.dir}")
+        return
+    for r in results:
+        print(f"{r.name}: matched {r.matched}/{r.total} -> likes of {r.user_id}")
+        for line in r.unmatched[: args.show]:
+            print(f"  NOT IN CATALOG {line}")
+        if len(r.unmatched) > args.show:
+            print(f"  … and {len(r.unmatched) - args.show} more")
+        for line in r.unparsed[: args.show]:
+            print(f"  CANNOT PARSE {line}")
+    matched, total = sum(r.matched for r in results), sum(r.total for r in results)
+    print(f"Playlists: {len(results)}, tracks matched {matched}/{total}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Recommender batch service")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -381,6 +403,11 @@ def main() -> None:
         "--source", action="append", help="Only these sources (upload, import, fma); repeatable"
     )
     p_genres.set_defaults(func=_fill_genres)
+
+    p_playlists = sub.add_parser("import-playlists", help="Playlists as likes of playlist users")
+    p_playlists.add_argument("--dir", default="playlists", help="Folder with .txt/.m3u/.csv")
+    p_playlists.add_argument("--show", type=int, default=10, help="Unmatched lines to print")
+    p_playlists.set_defaults(func=_import_playlists)
 
     args = parser.parse_args()
     asyncio.run(args.func(args))
