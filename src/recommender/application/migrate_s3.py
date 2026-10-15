@@ -158,11 +158,26 @@ def bucket_track_names() -> set[str]:
 class DirectoryUploadResult:
     uploaded: list[str] = field(default_factory=list)  # ключи s3
     duplicates: list[str] = field(default_factory=list)  # локальные пути: уже есть в бакете
+    broken: list[str] = field(default_factory=list)  # нет аудио (недокачан) — не загружается
     failed: list[tuple[str, str]] = field(default_factory=list)
 
 
-def upload_directory(directory: Path, prefix: str, workers: int = 8) -> DirectoryUploadResult:
-    """Залить аудио из папки (рекурсивно) под prefix, пропуская уже известные имена файлов."""
+def audio_seconds(path: Path) -> float:
+    """Длительность по заголовкам файла; 0, если аудио нет (например, скачались только теги)."""
+    import mutagen
+
+    try:
+        audio = mutagen.File(str(path))
+    except Exception:
+        return 0.0
+    return float(getattr(getattr(audio, "info", None), "length", 0.0) or 0.0)
+
+
+def upload_directory(
+    directory: Path, prefix: str, workers: int = 8, min_seconds: float = 5.0
+) -> DirectoryUploadResult:
+    """Залить аудио из папки (рекурсивно) под prefix, пропуская уже известные имена файлов
+    и файлы короче min_seconds (0 — без проверки): недокачанные, без аудиопотока."""
     _require_s3()
     if not directory.is_dir():
         raise ValueError(f"Not a directory: {directory}")
@@ -175,6 +190,9 @@ def upload_directory(directory: Path, prefix: str, workers: int = 8) -> Director
         name = _same_track_key(path.name)
         if name in known:
             result.duplicates.append(str(path))
+            continue
+        if min_seconds and audio_seconds(path) < min_seconds:
+            result.broken.append(str(path))
             continue
         known.add(name)  # одинаковые файлы в разных подпапках — один трек
         todo.append((path, prefix + _nfc(path.relative_to(directory).as_posix())))

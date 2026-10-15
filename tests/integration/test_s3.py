@@ -381,8 +381,22 @@ def test_upload_directory_skips_tracks_already_in_bucket(s3, tmp_path):
     (folder / "Album 2" / "a - ONE.mp3").write_bytes(b"same as upload, other case")
     (folder / "Album 1" / "cover.jpg").write_bytes(b"not audio")
 
-    result = upload_directory(folder, "music/")
+    result = upload_directory(folder, "music/", min_seconds=0)  # файлы-заглушки без аудио
 
     assert result.uploaded == ["music/Album 1/C - Йога.mp3"]
     assert len(result.duplicates) == 4
     assert _keys(s3, "music/") == {"music/Album/B - Два.mp3", "music/Album 1/C - Йога.mp3"}
+
+
+def test_upload_directory_skips_files_without_audio(s3, audio_files, tmp_path):
+    from recommender.application.migrate_s3 import upload_directory
+
+    folder = tmp_path / "dl"
+    folder.mkdir()
+    shutil.copy(audio_files[0], folder / "A - Song.wav")  # 3 секунды аудио
+    (folder / "B - Only Tags.mp3").write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x10" + b"\x00" * 16)
+
+    result = upload_directory(folder, "music/", min_seconds=1)
+
+    assert result.uploaded == ["music/A - Song.wav"]
+    assert result.broken == [str(folder / "B - Only Tags.mp3")]

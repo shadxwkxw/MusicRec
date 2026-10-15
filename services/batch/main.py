@@ -285,8 +285,11 @@ async def _upload_s3(args: argparse.Namespace) -> None:
     result = upload_directory(Path(args.dir), args.prefix, workers=args.workers)
     print(
         f"Upload to s3://{settings.s3_bucket}/{args.prefix}: uploaded={len(result.uploaded)}, "
-        f"already in bucket={len(result.duplicates)}, failed={len(result.failed)}"
+        f"already in bucket={len(result.duplicates)}, broken={len(result.broken)}, "
+        f"failed={len(result.failed)}"
     )
+    for path in result.broken:
+        print(f"  BROKEN (no audio, re-download) {path}")
     for path in result.duplicates:
         print(f"  SKIP (already in bucket) {path}")
     for path, err in result.failed:
