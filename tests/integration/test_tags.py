@@ -122,3 +122,29 @@ async def test_fill_genres_from_tags(api, audio_files, tmp_path):
 
     assert (result.filled, result.no_tag, result.missing) == (1, 1, [str(tmp_path / "gone.wav")])
     assert genres == {"t1": "Hip-Hop", "t2": None, "t3": None, "t4": "Indie", "t5": None}
+
+
+async def test_names_from_tags_when_file_name_has_no_separator(api, audio_files, tmp_path):
+    from mutagen.id3 import TIT2, TPE1
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    path = inbox / "Øneheart_Snowfall.wav"
+    shutil.copy(audio_files[0], path)
+    audio = WAVE(str(path))
+    audio.add_tags()
+    audio.tags.add(TPE1(encoding=3, text="Øneheart/reidenshi"))
+    audio.tags.add(TIT2(encoding=3, text="snowfall"))
+    audio.save()
+    shutil.copy(audio_files[1], inbox / "untagged_name.wav")
+    _tagged(audio_files[2], inbox / "Real Artist - Real Title.wav", artist="Tag Artist")
+
+    async with api.sessions() as db:
+        await run_batch_extract(inbox, db, default_artist="Unknown")
+        tracks = {(t.artist, t.title) for t in (await db.execute(select(TrackORM))).scalars()}
+
+    assert tracks == {
+        ("Øneheart, reidenshi", "snowfall"),  # «/» в теге — соавторы
+        ("Unknown", "untagged_name"),  # ни разделителя, ни тегов
+        ("Real Artist", "Real Title"),  # имя файла важнее тегов
+    }

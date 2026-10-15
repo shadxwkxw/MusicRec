@@ -165,15 +165,44 @@ async def import_playlist(
     return result
 
 
-async def import_playlists(db: AsyncSession, directory: Path) -> list[PlaylistImportResult]:
-    """Импортировать все плейлисты из папки (не рекурсивно)."""
-    if not directory.is_dir():
-        raise ValueError(f"Not a directory: {directory}")
+def folder_entries(folder: Path) -> list[str]:
+    """Папка с аудио как плейлист: «Артист - Название» по тем же правилам, что при импорте —
+    из имени файла, а если в нём нет разделителя, из тегов."""
+    from recommender.application.batch_extract import artist_and_title
+    from recommender.infrastructure.data_processing.tags import read_tags, tag_artist
+    from recommender.infrastructure.storage.audio_store import AUDIO_EXTENSIONS
+
+    lines = []
+    for path in sorted(folder.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in AUDIO_EXTENSIONS:
+            continue
+        stem = unicodedata.normalize("NFC", path.stem)
+        artist, title = artist_and_title(stem, "")
+        if not artist:
+            tags = read_tags(path)
+            artist, title = tag_artist(tags.artist) or "", tags.title or stem
+        lines.append(f"{artist} - {title}" if artist else stem)
+    return lines
+
+
+async def import_playlists(
+    db: AsyncSession, directory: Path | None = None, folders: Iterable[Path] = ()
+) -> list[PlaylistImportResult]:
+    """Импортировать плейлисты-файлы из directory (не рекурсивно) и плейлисты-папки с аудио
+    (folders): имя папки — имя плейлиста."""
+    folders = list(folders)
+    for path in ([directory] if directory else []) + folders:
+        if not path.is_dir():
+            raise ValueError(f"Not a directory: {path}")
     rows = (await db.execute(select(TrackORM.id, TrackORM.artist, TrackORM.title))).all()
     matcher = CatalogMatcher((r.id, r.artist, r.title) for r in rows)
     results = []
-    for path in sorted(directory.iterdir()):
-        if path.is_file() and path.suffix.lower() in PLAYLIST_SUFFIXES:
-            content = path.read_text(encoding="utf-8-sig", errors="replace")
-            results.append(await import_playlist(db, path.name, content, matcher))
+    if directory:
+        for path in sorted(directory.iterdir()):
+            if path.is_file() and path.suffix.lower() in PLAYLIST_SUFFIXES:
+                content = path.read_text(encoding="utf-8-sig", errors="replace")
+                results.append(await import_playlist(db, path.name, content, matcher))
+    for folder in folders:
+        content = "\n".join(folder_entries(folder))
+        results.append(await import_playlist(db, f"{folder.name}.txt", content, matcher))
     return results

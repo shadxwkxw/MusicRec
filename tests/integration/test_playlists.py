@@ -136,3 +136,30 @@ async def test_missing_folder_is_an_error(api, tmp_path):
     async with api.sessions() as db:
         with pytest.raises(ValueError, match="Not a directory"):
             await import_playlists(db, tmp_path / "nope")
+
+
+async def test_audio_folder_is_a_playlist(api, audio_files, tmp_path):
+    import shutil
+
+    from mutagen.id3 import TIT2, TPE1
+    from mutagen.wave import WAVE
+
+    mine = (await api.upload(0, title="Snowfall", artist="Øneheart"))["id"]
+    other = (await api.upload(1, title="Мяу", artist="Heronwater"))["id"]
+    folder = tmp_path / "chill"
+    folder.mkdir()
+    shutil.copy(audio_files[2], folder / "Heronwater - Мяу.mp3")
+    tagged = folder / "Øneheart_Snowfall.wav"  # без « - » — артист и название из тегов
+    shutil.copy(audio_files[3], tagged)
+    audio = WAVE(str(tagged))
+    audio.add_tags()
+    audio.tags.add(TPE1(encoding=3, text="Øneheart/reidenshi"))
+    audio.tags.add(TIT2(encoding=3, text="snowfall"))
+    audio.save()
+
+    async with api.sessions() as db:
+        (result,) = await import_playlists(db, folders=[folder])
+        likes = set((await db.execute(select(LikeORM.user_id, LikeORM.track_id))).all())
+
+    assert (result.name, result.matched, result.total) == ("chill.txt", 2, 2)
+    assert likes == {("playlist:chill", mine), ("playlist:chill", other)}

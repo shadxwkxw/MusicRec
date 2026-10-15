@@ -152,10 +152,12 @@ GENRE_SOURCES ?=
 batch-fill-genres:
 	$(PY) services/batch/main.py fill-genres $(GENRE_SOURCES)
 
-# Плейлисты как лайки (playlist:<имя файла>): make batch-import-playlists [PLAYLISTS=playlists]
+# Плейлисты как лайки (playlist:<имя>): файлы .txt/.m3u/.csv из PLAYLISTS и папки с аудио:
+# make batch-import-playlists PLAYLIST_FOLDERS="chill,electronic,old russian vibe" (через запятую)
 PLAYLISTS ?= playlists
+PLAYLIST_FOLDERS ?=
 batch-import-playlists:
-	$(PY) services/batch/main.py import-playlists --dir "$(PLAYLISTS)"
+	$(PY) services/batch/main.py import-playlists --dir "$(PLAYLISTS)" --folders "$(PLAYLIST_FOLDERS)"
 
 # Перенос в S3 (AUDIO_STORAGE=s3): аудио из data/audio, индекс, artifacts/*.parquet.
 # make batch-migrate-s3 DELETE_LOCAL=1 — удалить локальные копии аудио после переноса

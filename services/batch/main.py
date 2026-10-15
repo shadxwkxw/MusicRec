@@ -317,9 +317,12 @@ async def _import_playlists(args: argparse.Namespace) -> None:
 
     await init_db()
     async with async_session() as session:
-        results = await import_playlists(session, Path(args.dir))
+        folders = [*(args.folder or []), *(f.strip() for f in args.folders.split(",") if f.strip())]
+        results = await import_playlists(
+            session, Path(args.dir) if args.dir else None, [Path(f) for f in folders]
+        )
     if not results:
-        print(f"No playlists (.txt, .m3u, .m3u8, .csv) in {args.dir}")
+        print(f"No playlists (.txt, .m3u, .m3u8, .csv) in {args.dir} and no --folder")
         return
     for r in results:
         print(f"{r.name}: matched {r.matched}/{r.total} -> likes of {r.user_id}")
@@ -409,6 +412,12 @@ def main() -> None:
 
     p_playlists = sub.add_parser("import-playlists", help="Playlists as likes of playlist users")
     p_playlists.add_argument("--dir", default="playlists", help="Folder with .txt/.m3u/.csv")
+    p_playlists.add_argument(
+        "--folder", action="append", help="Folder of audio files as a playlist; repeatable"
+    )
+    p_playlists.add_argument(
+        "--folders", default="", help="Comma-separated audio folders (names may have spaces)"
+    )
     p_playlists.add_argument("--show", type=int, default=10, help="Unmatched lines to print")
     p_playlists.set_defaults(func=_import_playlists)
 

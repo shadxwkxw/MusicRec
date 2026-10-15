@@ -145,8 +145,13 @@ curl -X POST http://localhost:8000/likes -H "X-API-Key: $API_KEY" \
 `GET /recommendations/user/playlist:<имя>`.
 
 ```bash
-make batch-import-playlists PLAYLISTS=playlists
+make batch-import-playlists PLAYLISTS=playlists PLAYLIST_FOLDERS="chill,electronic,old russian vibe"
 ```
+
+Плейлист может быть и **папкой с аудиофайлами** (`PLAYLIST_FOLDERS`, имя
+папки — имя плейлиста): треки определяются так же, как при импорте — по имени
+файла «Артист - Название», а если разделителя нет, по тегам (артист и
+название; «/» в теге артиста — соавторы).
 
 Файлы в папке (по строке на трек): `.txt` — «Артист - Название» (тире любое),
 `.m3u`/`.m3u8` — `#EXTINF` или путь к файлу «Артист - Название.mp3», `.csv` —

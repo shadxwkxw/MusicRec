@@ -23,7 +23,7 @@ from recommender.infrastructure.data_processing.extract import (
     extract_features,
     features_to_bytes,
 )
-from recommender.infrastructure.data_processing.tags import read_tags
+from recommender.infrastructure.data_processing.tags import AudioTags, read_tags, tag_artist
 from recommender.infrastructure.storage.audio_store import (
     AUDIO_EXTENSIONS,
     configured_s3_store,
@@ -41,6 +41,7 @@ class ImportItem:
     artist: str
     genre: str | None = None
     source: str = "import"  # fma для датасета, см. TrackORM.source
+    names_from_tags: bool = False  # в имени файла нет «Артист - Название»: взять из тегов
 
 
 @dataclass
@@ -51,7 +52,7 @@ class BatchExtractResult:
     failed: list[tuple[str, str]] = field(default_factory=list)  # (filename, error)
 
 
-Extracted = tuple[bytes, float, str | None]  # признаки, длительность, жанр из тегов
+Extracted = tuple[bytes, float, AudioTags]  # признаки, длительность, теги
 
 
 def _extract(location: str) -> Extracted | str:
@@ -59,7 +60,7 @@ def _extract(location: str) -> Extracted | str:
     try:
         with store_for(location).local_copy(location) as path:
             features = extract_features(path)
-            return features_to_bytes(features), get_duration(path), read_tags(path).genre
+            return features_to_bytes(features), get_duration(path), read_tags(path)
     except Exception as e:
         return f"{type(e).__name__}: {e}"
 
@@ -105,13 +106,16 @@ async def run_batch_import(
         if isinstance(result, str):
             stats.failed.append((item.filename, result))
         else:
-            vector, duration, tag_genre = result
+            vector, duration, tags = result
+            artist, title = item.artist, item.title
+            if item.names_from_tags and tags.title:
+                artist, title = tag_artist(tags.artist) or artist, tags.title
             db.add(
                 TrackORM(
                     id=str(uuid.uuid4()),
-                    title=item.title,
-                    artist=item.artist,
-                    genre=item.genre or tag_genre,
+                    title=title,
+                    artist=artist,
+                    genre=item.genre or tags.genre,
                     source=item.source,
                     filename=item.filename,
                     audio_path=str(item.path),
@@ -149,7 +153,8 @@ async def run_batch_extract(
     default_artist: str = "Unknown",
     workers: int = 1,
 ) -> BatchExtractResult:
-    """Импортировать все аудиофайлы директории: «Артист - Название.mp3» или default_artist."""
+    """Импортировать все аудиофайлы директории: «Артист - Название.mp3», иначе артист и
+    название из тегов, а без них — default_artist и имя файла."""
     if not input_dir.exists() or not input_dir.is_dir():
         raise ValueError(f"Input directory not found: {input_dir}")
 
@@ -157,7 +162,8 @@ async def run_batch_extract(
     for path in sorted(input_dir.iterdir()):
         if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
             artist, title = artist_and_title(path.stem, default_artist)
-            items.append(ImportItem(path, path.name, title, artist))
+            no_names = (artist, title) == (default_artist, path.stem)
+            items.append(ImportItem(path, path.name, title, artist, names_from_tags=no_names))
     return await run_batch_import(items, db, workers=workers)
 
 
@@ -170,8 +176,12 @@ def s3_import_items(prefix: str, default_artist: str = "Unknown") -> list[Import
     store = configured_s3_store()
     items = []
     for key in store.list_audio(prefix):
-        artist, title = artist_and_title(PurePosixPath(key).stem, default_artist)
-        items.append(ImportItem(f"s3://{store.bucket}/{key}", key, title, artist))
+        stem = PurePosixPath(key).stem
+        artist, title = artist_and_title(stem, default_artist)
+        no_names = (artist, title) == (default_artist, stem)
+        items.append(
+            ImportItem(f"s3://{store.bucket}/{key}", key, title, artist, names_from_tags=no_names)
+        )
     return items
 
 

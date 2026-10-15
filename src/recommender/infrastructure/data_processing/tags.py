@@ -94,6 +94,13 @@ def canonical_genre(raw: str | None) -> str | None:
     return whole or raw.strip()
 
 
+def tag_artist(raw: str | None) -> str | None:
+    """Артист из тега: «/» — разделитель соавторов в ID3 (Øneheart/reidenshi)."""
+    if not raw:
+        return None
+    return ", ".join(part.strip() for part in raw.split("/") if part.strip()) or None
+
+
 @dataclass(frozen=True)
 class AudioTags:
     artist: str | None = None
