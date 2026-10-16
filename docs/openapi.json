@@ -290,6 +290,24 @@
         "title": "TrackFeaturesResponse",
         "type": "object"
       },
+      "TrackPopularity": {
+        "properties": {
+          "likes": {
+            "title": "Likes",
+            "type": "integer"
+          },
+          "track_id": {
+            "title": "Track Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "track_id",
+          "likes"
+        ],
+        "title": "TrackPopularity",
+        "type": "object"
+      },
       "TrackRegister": {
         "description": "Файл уже лежит в S3: его владелец — приложение, сервис только читает.",
         "properties": {
@@ -1017,6 +1035,58 @@
           }
         ],
         "summary": "Get All Tracks"
+      }
+    },
+    "/tracks/popularity": {
+      "get": {
+        "description": "Треки с лайками, самые лайкаемые первыми: число лайков от всех пользователей,\nвключая плейлисты. Приложение сортирует по нему свои подборки.",
+        "operationId": "get_track_popularity_tracks_popularity_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrackPopularity"
+                  },
+                  "title": "Response Get Track Popularity Tracks Popularity Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Track Popularity"
       }
     },
     "/tracks/register": {

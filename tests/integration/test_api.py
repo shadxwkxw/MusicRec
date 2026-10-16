@@ -177,6 +177,20 @@ async def test_like_unknown_track_404(api):
     assert resp.status_code == 404
 
 
+async def test_track_popularity_counts_likes_of_all_users(api):
+    ids = await api.seed(3)
+    for user in ("u1", "u2", "playlist:chill"):
+        await api.like(user, ids[1])
+    await api.like("u1", ids[0])
+
+    resp = await api.client.get("/tracks/popularity")
+    top = await api.client.get("/tracks/popularity?limit=1")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == [{"track_id": ids[1], "likes": 3}, {"track_id": ids[0], "likes": 1}]
+    assert top.json() == [{"track_id": ids[1], "likes": 3}]
+
+
 async def test_user_recommendations_exclude_liked(api):
     ids = await api.seed(5)
     await api.like("u1", ids[0])

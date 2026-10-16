@@ -84,6 +84,7 @@ curl http://localhost:8000/automl/status
 | POST | `/tracks/upload` | Загрузить аудио (`file`, `title`, `artist`, `genre`), извлечь признаки |
 | POST | `/tracks/register` | Зарегистрировать файл, который приложение уже положило в S3 (`location`, `title`, `artist`, `genre`); см. «Интеграция с приложением» |
 | GET | `/tracks` | Список треков (`limit` ≤ 200, `offset`, `source=import,upload,app`) с флагом `indexed`, источником и `audio_location` (`s3://…`) |
+| GET | `/tracks/popularity` | Треки с лайками, самые лайкаемые первыми: `[{track_id, likes}]` (`limit` ≤ 10000); лайки всех пользователей, включая плейлисты |
 | PATCH | `/tracks/{id}` | Исправить `title` / `artist` / `genre` |
 | DELETE | `/tracks/{id}` | Удалить трек, его лайки, аудиофайл и запись в индексе |
 | GET | `/tracks/{id}/features` | Сырой вектор признаков |

@@ -21,6 +21,12 @@ class TrackResponse(BaseModel):
     """Обложка из тегов файла в S3 (batch extract-covers), если есть."""
 
 
+class TrackPopularity(BaseModel):
+    track_id: str
+    likes: int
+    """Сколько пользователей лайкнули трек (с плейлистами: playlist:* — тоже пользователи)."""
+
+
 class TrackRegister(BaseModel):
     """Файл уже лежит в S3: его владелец — приложение, сервис только читает."""
 

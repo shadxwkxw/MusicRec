@@ -21,7 +21,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -89,6 +89,7 @@ from recommender.interfaces.online.schemas import (
     RecommendationResponse,
     SearchResponse,
     TrackFeaturesResponse,
+    TrackPopularity,
     TrackRegister,
     TrackResponse,
     TrackUpdate,
@@ -371,6 +372,23 @@ def _to_response(track: TrackORM, indexed_ids: set[str]) -> TrackResponse:
         audio_location=track.audio_path if is_s3(track.audio_path or "") else None,
         cover_location=track.cover_path or None,
     )
+
+
+@reads.get("/tracks/popularity", response_model=list[TrackPopularity])
+async def get_track_popularity(
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(1000, ge=1, le=10000),
+):
+    """Треки с лайками, самые лайкаемые первыми: число лайков от всех пользователей,
+    включая плейлисты. Приложение сортирует по нему свои подборки."""
+    likes = func.count(LikeORM.id)
+    result = await db.execute(
+        select(LikeORM.track_id, likes)
+        .group_by(LikeORM.track_id)
+        .order_by(likes.desc(), LikeORM.track_id)
+        .limit(limit)
+    )
+    return [TrackPopularity(track_id=track_id, likes=count) for track_id, count in result.all()]
 
 
 @reads.get("/tracks", response_model=list[TrackResponse])
