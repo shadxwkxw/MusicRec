@@ -101,12 +101,66 @@ async def test_embedding_mode_end_to_end(api, embedding_mode):
     assert {r["track_id"] for r in recs} == set(ids[1:])
 
     # Загрузка в режиме embedding не попадает в индекс сразу, даже при обученном нормализаторе
-    late = await api.upload(5)
+    late = await api.upload(5)  # фоновый эмбеддинг в тестах выключен (EMBED_NEW_TRACKS)
     assert late["indexed"] is False
     assert late["id"] not in app.state.engine.track_ids
     await _embed(api)
     await api.client.post("/index/rebuild")
     assert late["id"] in load_current().engine.track_ids
+
+
+class FakeAudioEncoder:
+    """Как ClapFileEncoder в отдельном процессе: encode(пути) → векторы FakeEmbedder."""
+
+    model_name = FakeEmbedder.model_name
+
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+        self.paths: list[str] = []
+
+    def encode(self, paths):
+        self.paths.extend(paths)
+        if self.fail:
+            raise RuntimeError("cannot decode")
+        return np.stack([v for _, v in FakeEmbedder().embed_files(paths)])
+
+
+@pytest.fixture
+def background_embedding(monkeypatch, embedding_mode):
+    from recommender.interfaces.online import routes
+
+    encoder = FakeAudioEncoder()
+    monkeypatch.setattr(settings, "api_embed_new_tracks", True)
+    monkeypatch.setattr(routes, "_load_audio_encoder", lambda: encoder)
+    monkeypatch.setattr(app.state, "audio_encoder", None, raising=False)
+    return encoder
+
+
+async def test_new_track_is_embedded_and_indexed_in_background(api, background_embedding):
+    ids = [(await api.upload(i))["id"] for i in range(4)]
+    # Индекса ещё нет (нормализатор не обучен) — эмбеддинги сохранены, индекс ждёт rebuild
+    assert await _count_embeddings(api) == 4
+    assert (await api.client.post("/index/rebuild")).json()["tracks_indexed"] == 4
+
+    late = await api.upload(4)
+
+    # Ответ — до эмбеддинга, но фоновая задача завершилась вместе с запросом
+    assert late["indexed"] is False
+    assert late["id"] in app.state.engine.track_ids
+    assert late["id"] in load_current().engine.track_ids  # и в опубликованной версии
+    recs = (await api.client.get(f"/recommendations/{late['id']}")).json()["recommendations"]
+    assert {r["track_id"] for r in recs} == set(ids)
+    assert len(background_embedding.paths) == 5
+
+
+async def test_failed_background_embedding_leaves_track_for_batch(api, background_embedding):
+    background_embedding.fail = True
+
+    track = await api.upload(0)
+
+    assert track["indexed"] is False
+    assert await _count_embeddings(api) == 0
+    assert (await _embed(api)).processed == 1  # batch embed досчитает
 
 
 async def test_switching_to_embeddings_drops_librosa_tuned_params(api, monkeypatch):

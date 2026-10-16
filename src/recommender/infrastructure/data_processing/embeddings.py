@@ -103,6 +103,18 @@ class ClapEmbedder:
         means = np.stack([per_window[owners == i].mean(axis=0) for i in range(len(waveforms))])
         return _normalize(means).astype(np.float32)
 
+    def encode(self, paths: Sequence[str | Path]) -> np.ndarray:
+        """(n, dim) эмбеддингов файлов; ошибка чтения любого — исключение.
+
+        Тот же интерфейс, что у текстового кодировщика: так модель работает в отдельном
+        процессе через text_worker.ProcessTextEncoder (см. ClapFileEncoder)."""
+        vectors: dict[int, np.ndarray] = {}
+        for i, result in self.embed_files(paths):
+            if isinstance(result, str):
+                raise RuntimeError(f"{paths[i]}: {result}")
+            vectors[i] = result
+        return np.stack([vectors[i] for i in range(len(paths))])
+
     def embed_files(self, paths: Sequence[str | Path]) -> Iterator[tuple[int, np.ndarray | str]]:
         """(индекс пути, вектор или текст ошибки) пачками; аудио декодируется в потоках."""
 
@@ -123,3 +135,20 @@ class ClapEmbedder:
                 for i, y in enumerate(chunk):
                     if isinstance(y, str):
                         yield start + i, y
+
+
+class ClapFileEncoder(ClapEmbedder):
+    """ClapEmbedder с параметрами из настроек: фабрика для ProcessTextEncoder, которая
+    передаёт конструктору только строки. Сервис считает им эмбеддинги новых треков."""
+
+    def __init__(self) -> None:
+        from recommender.config import settings
+
+        super().__init__(
+            model_name=settings.embedding_model,
+            window_seconds=settings.embedding_window_seconds,
+            max_windows=settings.embedding_max_windows,
+            duration_limit=settings.duration_limit,
+            batch_tracks=1,
+            loaders=1,
+        )

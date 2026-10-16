@@ -117,6 +117,7 @@ class Settings(BaseModel):
     api_tracks_page_max: int = Field(ge=1)
     api_max_rec_limit: int = Field(ge=1)
     api_max_upload_mb: float = Field(gt=0)
+    api_embed_new_tracks: bool
     api_key: SecretStr | None
     api_protect_reads: bool
     api_cors_origins: list[str]
@@ -271,6 +272,7 @@ def _build_settings(raw: dict) -> Settings:
         api_tracks_page_max=raw["api"]["tracks_page_max"],
         api_max_rec_limit=raw["api"]["max_rec_limit"],
         api_max_upload_mb=raw["api"]["max_upload_mb"],
+        api_embed_new_tracks=raw["api"]["embed_new_tracks"],
         api_key=raw["api"]["key"] or None,
         api_protect_reads=raw["api"]["protect_reads"],
         log_level=raw["observability"]["log_level"],

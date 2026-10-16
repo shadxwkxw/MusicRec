@@ -78,6 +78,7 @@ from recommender.infrastructure.storage.postgres import (
     TrackORM,
     async_session,
     get_db,
+    utcnow,
 )
 from recommender.interfaces.online.observability import count_recommendations
 from recommender.interfaces.online.schemas import (
@@ -119,7 +120,10 @@ def _update_index(request: Request, change: Callable[[IndexArtifacts], bool]) ->
     Если batch уже опубликовал более новую версию, изменение применяется к ней,
     а не перетирает её устаревшим индексом из памяти.
     """
-    state = request.app.state
+    return _update_state(request.app.state, change)
+
+
+def _update_state(state, change: Callable[[IndexArtifacts], bool]) -> IndexArtifacts:
     artifacts = update_current(IndexArtifacts(state.engine, state.normalizer), change)
     if _compatible(artifacts):
         state.engine, state.normalizer = artifacts.engine, artifacts.normalizer
@@ -145,6 +149,7 @@ def _copy_limited(source: IO[bytes], target: IO[bytes], max_bytes: int) -> int |
 @writes.post("/tracks/upload", response_model=TrackResponse)
 async def upload_track(
     request: Request,
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     title: str = Form(...),
     artist: str = Form(default="Unknown"),
@@ -195,7 +200,7 @@ async def upload_track(
     db.add(track)
     await db.commit()
 
-    indexed = _index_new_track(request, track_id, features)
+    indexed = _index_new_track(request, background, track_id, features, audio_path)
 
     return TrackResponse(
         id=track_id,
@@ -209,20 +214,82 @@ async def upload_track(
     )
 
 
-def _index_new_track(request: Request, track_id: str, features) -> bool:
-    """Сразу в индекс — только если индекс на librosa-признаках и нормализатор уже
-    обучен (иначе сырые признаки смешаются с нормализованными). В режиме embedding
-    эмбеддинг досчитает batch embed, трек появится после rebuild."""
-    if uses_embeddings():
-        return False
+def _adder(track_id: str, vector) -> Callable[[IndexArtifacts], bool]:
+    """Изменение индекса: добавить трек, если индекс того же источника и нормализатор
+    уже обучен (иначе сырые признаки смешаются с нормализованными)."""
 
     def add(artifacts: IndexArtifacts) -> bool:
         if not _compatible(artifacts) or not artifacts.normalizer.is_fitted:
             return False
-        artifacts.engine.add_tracks([track_id], artifacts.normalizer.transform(features))
+        if track_id in artifacts.engine.track_ids:
+            return False
+        artifacts.engine.add_tracks([track_id], artifacts.normalizer.transform(vector))
         return True
 
-    return track_id in _update_index(request, add).engine.track_ids
+    return add
+
+
+def _index_new_track(
+    request: Request, background: BackgroundTasks, track_id: str, features, location: str
+) -> bool:
+    """Новый трек — в индекс. librosa-признаки уже посчитаны: сразу. В режиме embedding
+    эмбеддинг считается в фоне после ответа (api.embed_new_tracks), иначе его досчитает
+    batch embed, и трек появится после rebuild. True — трек уже в индексе."""
+    if not uses_embeddings():
+        return track_id in _update_index(request, _adder(track_id, features)).engine.track_ids
+    if settings.api_embed_new_tracks:
+        background.add_task(_embed_new_track, request.app.state, track_id, location)
+    return False
+
+
+def _load_audio_encoder() -> TextEncoder:
+    # В отдельном процессе, как текстовая модель: torch и faiss в одном процессе
+    # на macOS конфликтуют. Интерфейс тот же: encode(пути файлов) → векторы
+    return ProcessTextEncoder(
+        "recommender.infrastructure.data_processing.embeddings:ClapFileEncoder"
+    )
+
+
+def _audio_encoder(state) -> TextEncoder:
+    """Модель CLAP для аудио грузится при первом новом треке."""
+    if getattr(state, "audio_encoder", None) is None:
+        state.audio_encoder = _load_audio_encoder()
+    return state.audio_encoder
+
+
+async def _embed_new_track(state, track_id: str, location: str) -> None:
+    """Фоновая задача: эмбеддинг трека → track_embeddings → индекс. Сбой не теряет трек:
+    его досчитает batch embed."""
+    try:
+        encoder = await run_in_threadpool(_audio_encoder, state)
+        if encoder.model_name != settings.embedding_model:
+            raise RuntimeError(f"encoder model {encoder.model_name} != {settings.embedding_model}")
+
+        def embed():
+            with store_for(location).local_copy(location) as path:
+                return encoder.encode([str(path)])[0]
+
+        vector = await run_in_threadpool(embed)
+        async with async_session() as db:
+            if await db.get(TrackORM, track_id) is None:
+                return  # трек успели удалить
+            await db.merge(
+                TrackEmbeddingORM(
+                    track_id=track_id,
+                    model=encoder.model_name,
+                    vector=vector.astype("float32").tobytes(),
+                    created_at=utcnow(),
+                )
+            )
+            await db.commit()
+        await run_in_threadpool(_update_state, state, _adder(track_id, vector.copy()))
+        logger.info("Embedded and indexed new track %s", track_id)
+    except ImportError:
+        logger.warning(
+            "Track %s: no torch/transformers for embeddings, run batch embed + rebuild", track_id
+        )
+    except Exception:
+        logger.exception("Track %s: background embedding failed, run batch embed", track_id)
 
 
 @writes.post(
@@ -232,7 +299,11 @@ def _index_new_track(request: Request, track_id: str, features) -> bool:
     status_code=201,
 )
 async def register_track(
-    request: Request, data: TrackRegister, response: Response, db: AsyncSession = Depends(get_db)
+    request: Request,
+    data: TrackRegister,
+    response: Response,
+    background: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
 ):
     """Зарегистрировать трек, файл которого уже лежит в S3 (его загрузило приложение).
 
@@ -283,7 +354,7 @@ async def register_track(
     )
     db.add(track)
     await db.commit()
-    indexed = _index_new_track(request, track.id, features)
+    indexed = _index_new_track(request, background, track.id, features, data.location)
     return _to_response(track, {track.id} if indexed else set())
 
 
