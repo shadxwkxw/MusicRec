@@ -25,6 +25,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from recommender.application.covers import delete_cover
 from recommender.application.features import (
     IndexSourceMismatchError,
     audio_path_of,
@@ -297,6 +298,7 @@ def _to_response(track: TrackORM, indexed_ids: set[str]) -> TrackResponse:
         indexed=track.id in indexed_ids,
         source=track.source,
         audio_location=track.audio_path if is_s3(track.audio_path or "") else None,
+        cover_location=track.cover_path or None,
     )
 
 
@@ -349,6 +351,7 @@ async def delete_track(request: Request, track_id: str, db: AsyncSession = Depen
         raise HTTPException(404, "Track not found")
 
     location = audio_path_of(track)
+    cover = track.cover_path
     await db.execute(delete(LikeORM).where(LikeORM.track_id == track_id))
     await db.execute(delete(TrackEmbeddingORM).where(TrackEmbeddingORM.track_id == track_id))
     await db.delete(track)
@@ -358,6 +361,10 @@ async def delete_track(request: Request, track_id: str, db: AsyncSession = Depen
         await run_in_threadpool(store_for(location).delete_upload, location)
     except Exception:
         logger.exception("Track %s deleted, but its audio %s was not", track_id, location)
+    try:
+        await run_in_threadpool(delete_cover, cover)  # обложками каталога владеет сервис
+    except Exception:
+        logger.exception("Track %s deleted, but its cover %s was not", track_id, cover)
 
     # Публикуем новую версию, иначе после рестарта удалённый трек вернётся из индекса на диске
     _update_index(request, lambda artifacts: bool(artifacts.engine.remove_tracks({track_id})))

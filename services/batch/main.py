@@ -13,6 +13,7 @@ Subcommands:
     upload-s3  — залить папку с новой музыкой в S3 (без дублей), дальше import-s3
     fill-genres — дописать жанр из тегов файла трекам без жанра
     import-playlists — плейлисты как лайки пользователей playlist:<имя файла>
+    extract-covers — обложки из тегов файлов в S3 (catalog-covers/)
 
 rebuild и tune пишут индекс на диск; запущенный online-сервис подхватит его
 после POST /index/reload.
@@ -337,6 +338,32 @@ async def _import_playlists(args: argparse.Namespace) -> None:
     print(f"Playlists: {len(results)}, tracks matched {matched}/{total}")
 
 
+async def _extract_covers(args: argparse.Namespace) -> None:
+    from recommender.application.covers import extract_covers
+
+    if settings.storage_backend != "s3":
+        print("Covers are stored in S3 (AUDIO_STORAGE=s3): skipping")
+        return
+
+    def progress(done: int, total: int) -> None:
+        print(f"  {done}/{total}", flush=True)
+
+    await init_db()
+    async with async_session() as session:
+        result = await extract_covers(
+            session,
+            args.source or None,
+            workers=args.workers,
+            limit=args.limit or None,
+            progress=progress,
+        )
+    print(
+        f"Covers: found={result.found}, without cover={result.without_cover}, failed={len(result.failed)}"
+    )
+    for track_id, error in result.failed[:20]:
+        print(f"  FAIL {track_id}: {error}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Recommender batch service")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -421,6 +448,12 @@ def main() -> None:
     )
     p_playlists.add_argument("--show", type=int, default=10, help="Unmatched lines to print")
     p_playlists.set_defaults(func=_import_playlists)
+
+    p_covers = sub.add_parser("extract-covers", help="Covers from audio tags into S3")
+    p_covers.add_argument("--source", action="append", help="Only these sources; repeatable")
+    p_covers.add_argument("--workers", type=int, default=8, help="Parallel S3 reads")
+    p_covers.add_argument("--limit", type=int, default=0, help="Only the first N tracks")
+    p_covers.set_defaults(func=_extract_covers)
 
     args = parser.parse_args()
     asyncio.run(args.func(args))

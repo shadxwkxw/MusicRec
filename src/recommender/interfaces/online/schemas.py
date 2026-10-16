@@ -17,6 +17,8 @@ class TrackResponse(BaseModel):
     """upload (через API), import (папка, S3), app (зарегистрирован приложением) или fma."""
     audio_location: str | None = None
     """s3://bucket/key, если аудио в S3 (локальные пути наружу не отдаются)."""
+    cover_location: str | None = None
+    """Обложка из тегов файла в S3 (batch extract-covers), если есть."""
 
 
 class TrackRegister(BaseModel):

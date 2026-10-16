@@ -126,6 +126,7 @@ def choose_feature_step() -> str:
 )
 def recommender_daily():
     import_new = batch("import_new_tracks", *import_command())
+    covers = batch("extract_covers", "extract-covers", "--workers", "4")
     embed = batch("embed", "embed")
     rebuild = batch("rebuild", "rebuild", trigger_rule="none_failed_min_one_success")
     recommend = batch(
@@ -136,7 +137,7 @@ def recommender_daily():
         "--use-likes",
     )
 
-    import_new >> choose_feature_step() >> [embed, rebuild]
+    import_new >> covers >> choose_feature_step() >> [embed, rebuild]
     embed >> rebuild
     rebuild >> reload_online_index() >> recommend
 

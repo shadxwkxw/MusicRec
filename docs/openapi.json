@@ -349,6 +349,17 @@
             ],
             "title": "Audio Location"
           },
+          "cover_location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Location"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",

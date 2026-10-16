@@ -480,3 +480,109 @@ async def test_catalog_listing_for_sync(api, s3, audio_files):
         ("import", f"s3://{BUCKET}/music/B - Song.wav"),
     }
     assert [t["title"] for t in only_app] == ["A"]
+
+
+# ── Обложки из тегов (batch extract-covers) ──────────────────────
+
+
+JPEG = b"\xff\xd8\xff\xe0" + b"fake-jpeg" * 50
+
+
+def _mp3_with_cover(path, cover=JPEG, audio_bytes=2_000_000):
+    from mutagen.id3 import APIC, ID3
+
+    path.write_bytes(b"")
+    tags = ID3()
+    if cover:
+        tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="front", data=cover))
+    tags.save(str(path))
+    with path.open("ab") as f:
+        f.write(b"\xff\xfb" + b"\x00" * audio_bytes)  # «аудио» после тега
+    return path
+
+
+async def _track(api, track_id, location):
+    async with api.sessions() as db:
+        db.add(
+            TrackORM(
+                id=track_id, title=track_id, filename=track_id, audio_path=location, source="import"
+            )
+        )
+        await db.commit()
+
+
+async def test_extract_covers_reads_only_the_id3_tag(api, s3, tmp_path, monkeypatch):
+    from recommender.application import covers
+
+    s3.upload_file(str(_mp3_with_cover(tmp_path / "a.mp3")), BUCKET, "music/a.mp3")
+    s3.upload_file(str(_mp3_with_cover(tmp_path / "b.mp3", cover=None)), BUCKET, "music/b.mp3")
+    await _track(api, "with-cover", f"s3://{BUCKET}/music/a.mp3")
+    await _track(api, "no-cover", f"s3://{BUCKET}/music/b.mp3")
+
+    def no_full_download(location):
+        raise AssertionError(f"mp3 downloaded whole: {location}")
+
+    monkeypatch.setattr(covers, "store_for", no_full_download)
+    async with api.sessions() as db:
+        result = await covers.extract_covers(db)
+        again = await covers.extract_covers(db)
+        paths = dict((await db.execute(select(TrackORM.id, TrackORM.cover_path))).all())
+
+    assert (result.found, result.without_cover, result.failed) == (1, 1, [])
+    assert (again.found, again.without_cover) == (0, 0)  # проверенные не перечитываются
+    assert paths == {"with-cover": f"s3://{BUCKET}/catalog-covers/with-cover.jpg", "no-cover": ""}
+    stored = s3.get_object(Bucket=BUCKET, Key="catalog-covers/with-cover.jpg")
+    assert stored["Body"].read() == JPEG
+    assert stored["ContentType"] == "image/jpeg"
+
+
+async def test_extract_covers_reads_other_formats_whole(api, s3, audio_files):
+    from mutagen.id3 import APIC
+    from mutagen.wave import WAVE
+
+    from recommender.application.covers import extract_covers
+
+    wav = Path(audio_files[0]).with_name("covered.wav")
+    shutil.copy(audio_files[0], wav)
+    audio = WAVE(str(wav))
+    audio.add_tags()
+    audio.tags.add(APIC(encoding=3, mime="image/png", type=3, desc="", data=b"\x89PNG fake"))
+    audio.save()
+    s3.upload_file(str(wav), BUCKET, "music/c.wav")
+    await _track(api, "wav", f"s3://{BUCKET}/music/c.wav")
+
+    async with api.sessions() as db:
+        result = await extract_covers(db)
+
+    assert result.found == 1
+    assert "catalog-covers/wav.png" in _keys(s3, "catalog-covers/")
+
+
+async def test_deleting_a_track_removes_only_its_own_cover(api, s3, tmp_path):
+    s3.upload_file(str(_mp3_with_cover(tmp_path / "a.mp3")), BUCKET, "music/a.mp3")
+    await _track(api, "t1", f"s3://{BUCKET}/music/a.mp3")
+    from recommender.application.covers import extract_covers
+
+    async with api.sessions() as db:
+        await extract_covers(db)
+        db.add(
+            TrackORM(
+                id="t2",
+                title="t2",
+                filename="t2",
+                source="import",
+                audio_path=f"s3://{BUCKET}/music/a.mp3",
+                cover_path=f"s3://{BUCKET}/covers/app.jpg",
+            )
+        )
+        await db.commit()
+    s3.put_object(Bucket=BUCKET, Key="covers/app.jpg", Body=b"app")  # обложка приложения
+
+    listed = {t["id"]: t["cover_location"] for t in (await api.client.get("/tracks")).json()}
+    assert listed["t1"] == f"s3://{BUCKET}/catalog-covers/t1.jpg"
+
+    for track_id in ("t1", "t2"):
+        assert (await api.client.delete(f"/tracks/{track_id}")).status_code == 204
+
+    assert _keys(s3, "catalog-covers/") == set()
+    assert "covers/app.jpg" in _keys(s3, "covers/")  # чужую обложку не трогаем

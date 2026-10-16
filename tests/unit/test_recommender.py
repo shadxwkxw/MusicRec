@@ -740,3 +740,13 @@ def test_boost_weights_are_tuned_per_path(monkeypatch):
     engine = type("E", (), {"boost_weight": 0.0, "user_boost_weight": 0.0})()
 
     assert T._tune_boost(engine, None, {}, {}, {}) == (0.0, 1.5)
+
+
+def test_id3_tag_size():
+    from recommender.infrastructure.data_processing.covers import id3_tag_size
+
+    # размер 257 в syncsafe: 0x00 0x00 0x02 0x01
+    assert id3_tag_size(b"ID3\x03\x00\x00\x00\x00\x02\x01") == 10 + 257
+    assert id3_tag_size(b"ID3\x04\x00\x10\x00\x00\x00\x7f") == 10 + 127 + 10  # с подвалом
+    assert id3_tag_size(b"\xff\xfb\x90\x00" + b"\x00" * 6) is None
+    assert id3_tag_size(b"ID3") is None
