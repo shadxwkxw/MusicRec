@@ -290,11 +290,64 @@
         "title": "TrackFeaturesResponse",
         "type": "object"
       },
+      "TrackRegister": {
+        "description": "Файл уже лежит в S3: его владелец — приложение, сервис только читает.",
+        "properties": {
+          "artist": {
+            "default": "Unknown",
+            "minLength": 1,
+            "title": "Artist",
+            "type": "string"
+          },
+          "genre": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genre"
+          },
+          "location": {
+            "examples": [
+              "s3://music/app/123.mp3"
+            ],
+            "minLength": 6,
+            "title": "Location",
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "location",
+          "title"
+        ],
+        "title": "TrackRegister",
+        "type": "object"
+      },
       "TrackResponse": {
         "properties": {
           "artist": {
             "title": "Artist",
             "type": "string"
+          },
+          "audio_location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio Location"
           },
           "created_at": {
             "format": "date-time",
@@ -876,6 +929,7 @@
     },
     "/tracks": {
       "get": {
+        "description": "Каталог, сначала новые; для синхронизации — с фильтром по источнику.",
         "operationId": "get_all_tracks_tracks_get",
         "parameters": [
           {
@@ -899,6 +953,24 @@
               "minimum": 0,
               "title": "Offset",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Только эти источники через запятую: upload, import, app, fma",
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Только эти источники через запятую: upload, import, app, fma",
+              "title": "Source"
             }
           }
         ],
@@ -934,6 +1006,53 @@
           }
         ],
         "summary": "Get All Tracks"
+      }
+    },
+    "/tracks/register": {
+      "post": {
+        "description": "Зарегистрировать трек, файл которого уже лежит в S3 (его загрузило приложение).\n\nСервис читает файл, считает признаки, длительность и жанр из тегов, но файлом не\nвладеет: при удалении трека объект в S3 остаётся. Разрешены только объекты своего\nбакета под storage.s3_register_prefixes. Повторная регистрация того же файла\nвозвращает существующий трек (200).",
+        "operationId": "register_track_tracks_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackRegister"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Уже зарегистрирован"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackResponse"
+                }
+              }
+            },
+            "description": "Создан"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Register Track"
       }
     },
     "/tracks/upload": {

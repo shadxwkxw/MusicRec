@@ -57,6 +57,7 @@ class Settings(BaseModel):
     s3_bucket: str | None
     s3_upload_prefix: str
     s3_index_prefix: str
+    s3_register_prefixes: list[str]
     s3_artifacts_prefix: str
     s3_endpoint_url: str | None
     s3_region: str
@@ -210,6 +211,11 @@ def _build_settings(raw: dict) -> Settings:
         s3_bucket=raw["storage"]["s3_bucket"] or None,
         s3_upload_prefix=raw["storage"]["s3_upload_prefix"],
         s3_index_prefix=raw["storage"]["s3_index_prefix"],
+        s3_register_prefixes=[
+            p.strip()
+            for p in str(raw["storage"]["s3_register_prefixes"] or "").split(",")
+            if p.strip()
+        ],
         s3_artifacts_prefix=raw["storage"]["s3_artifacts_prefix"],
         s3_endpoint_url=raw["storage"]["s3_endpoint_url"] or None,
         s3_region=raw["storage"]["s3_region"],

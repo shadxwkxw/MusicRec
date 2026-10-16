@@ -17,6 +17,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
 )
 from fastapi.concurrency import run_in_threadpool
@@ -62,7 +63,12 @@ from recommender.infrastructure.storage.artifacts import (
     load_current,
     update_current,
 )
-from recommender.infrastructure.storage.audio_store import store_for, upload_store
+from recommender.infrastructure.storage.audio_store import (
+    is_s3,
+    parse_s3_uri,
+    store_for,
+    upload_store,
+)
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import (
     AutoMLRunORM,
@@ -81,12 +87,14 @@ from recommender.interfaces.online.schemas import (
     RecommendationResponse,
     SearchResponse,
     TrackFeaturesResponse,
+    TrackRegister,
     TrackResponse,
     TrackUpdate,
 )
 from recommender.interfaces.online.security import require_api_key, require_read_access
 
 logger = logging.getLogger(__name__)
+REGISTERED_SOURCE = "app"  # треки, файлы которых принадлежат приложению
 # Чтение — по ключу, только если api.protect_reads; изменения — всегда по ключу
 reads = APIRouter(dependencies=[Depends(require_read_access)])
 writes = APIRouter(dependencies=[Depends(require_api_key)])
@@ -186,19 +194,7 @@ async def upload_track(
     db.add(track)
     await db.commit()
 
-    # Сразу в индекс — только если индекс на librosa-признаках и нормализатор
-    # уже обучен (иначе сырые признаки смешаются с нормализованными). В режиме
-    # embedding эмбеддинг досчитает batch embed, трек появится после rebuild.
-    indexed = False
-    if not uses_embeddings():
-
-        def add(artifacts: IndexArtifacts) -> bool:
-            if not _compatible(artifacts) or not artifacts.normalizer.is_fitted:
-                return False
-            artifacts.engine.add_tracks([track_id], artifacts.normalizer.transform(features))
-            return True
-
-        indexed = track_id in _update_index(request, add).engine.track_ids
+    indexed = _index_new_track(request, track_id, features)
 
     return TrackResponse(
         id=track_id,
@@ -212,6 +208,84 @@ async def upload_track(
     )
 
 
+def _index_new_track(request: Request, track_id: str, features) -> bool:
+    """Сразу в индекс — только если индекс на librosa-признаках и нормализатор уже
+    обучен (иначе сырые признаки смешаются с нормализованными). В режиме embedding
+    эмбеддинг досчитает batch embed, трек появится после rebuild."""
+    if uses_embeddings():
+        return False
+
+    def add(artifacts: IndexArtifacts) -> bool:
+        if not _compatible(artifacts) or not artifacts.normalizer.is_fitted:
+            return False
+        artifacts.engine.add_tracks([track_id], artifacts.normalizer.transform(features))
+        return True
+
+    return track_id in _update_index(request, add).engine.track_ids
+
+
+@writes.post(
+    "/tracks/register",
+    response_model=TrackResponse,
+    responses={200: {"description": "Уже зарегистрирован"}, 201: {"description": "Создан"}},
+    status_code=201,
+)
+async def register_track(
+    request: Request, data: TrackRegister, response: Response, db: AsyncSession = Depends(get_db)
+):
+    """Зарегистрировать трек, файл которого уже лежит в S3 (его загрузило приложение).
+
+    Сервис читает файл, считает признаки, длительность и жанр из тегов, но файлом не
+    владеет: при удалении трека объект в S3 остаётся. Разрешены только объекты своего
+    бакета под storage.s3_register_prefixes. Повторная регистрация того же файла
+    возвращает существующий трек (200).
+    """
+    if settings.storage_backend != "s3":
+        raise HTTPException(409, "Registering S3 files needs AUDIO_STORAGE=s3")
+    try:
+        bucket, key = parse_s3_uri(data.location)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    prefixes = settings.s3_register_prefixes
+    if bucket != settings.s3_bucket or not any(key.startswith(p) for p in prefixes):
+        allowed = ", ".join(f"s3://{settings.s3_bucket}/{p}" for p in prefixes) or "nothing"
+        raise HTTPException(422, f"Location must be under {allowed}")
+
+    existing = (
+        await db.execute(select(TrackORM).where(TrackORM.filename == key))
+    ).scalar_one_or_none()
+    if existing is not None:
+        response.status_code = 200
+        return _to_response(existing, set(_engine(request).track_ids))
+
+    def read():
+        with store_for(data.location).local_copy(data.location) as path:
+            return extract_features(path), get_duration(path), read_tags(path).genre
+
+    try:
+        features, duration, tag_genre = await run_in_threadpool(read)
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"Audio not found: {data.location}") from e
+    except Exception as e:
+        raise HTTPException(400, f"Failed to extract features: {e}") from e
+
+    track = TrackORM(
+        id=str(uuid.uuid4()),
+        title=data.title,
+        artist=data.artist,
+        genre=data.genre or tag_genre,
+        filename=key,  # как у import-s3: повторный импорт этого ключа будет пропущен
+        audio_path=data.location,
+        source=REGISTERED_SOURCE,
+        duration=duration,
+        feature_vector=features_to_bytes(features),
+    )
+    db.add(track)
+    await db.commit()
+    indexed = _index_new_track(request, track.id, features)
+    return _to_response(track, {track.id} if indexed else set())
+
+
 def _to_response(track: TrackORM, indexed_ids: set[str]) -> TrackResponse:
     return TrackResponse(
         id=track.id,
@@ -222,6 +296,7 @@ def _to_response(track: TrackORM, indexed_ids: set[str]) -> TrackResponse:
         created_at=track.created_at,
         indexed=track.id in indexed_ids,
         source=track.source,
+        audio_location=track.audio_path if is_s3(track.audio_path or "") else None,
     )
 
 
@@ -231,10 +306,17 @@ async def get_all_tracks(
     db: AsyncSession = Depends(get_db),
     limit: int = Query(settings.api_tracks_page_size, ge=1, le=settings.api_tracks_page_max),
     offset: int = Query(0, ge=0),
+    source: str | None = Query(
+        None, description="Только эти источники через запятую: upload, import, app, fma"
+    ),
 ):
-    result = await db.execute(
-        select(TrackORM).order_by(TrackORM.created_at.desc()).limit(limit).offset(offset)
-    )
+    """Каталог, сначала новые; для синхронизации — с фильтром по источнику."""
+    query = select(TrackORM).order_by(TrackORM.created_at.desc(), TrackORM.id)
+    if source:
+        query = query.where(
+            TrackORM.source.in_([s.strip() for s in source.split(",") if s.strip()])
+        )
+    result = await db.execute(query.limit(limit).offset(offset))
     indexed_ids = set(_engine(request).track_ids)
     tracks: Sequence[TrackORM] = result.scalars().all()
     return [_to_response(t, indexed_ids) for t in tracks]

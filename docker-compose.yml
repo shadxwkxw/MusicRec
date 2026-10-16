@@ -9,6 +9,7 @@ x-app-env: &app-env
   S3_UPLOAD_PREFIX: ${S3_UPLOAD_PREFIX:-uploads/}
   S3_IMPORT_PREFIX: ${S3_IMPORT_PREFIX:-}
   S3_INDEX_PREFIX: ${S3_INDEX_PREFIX:-index/}
+  S3_REGISTER_PREFIXES: ${S3_REGISTER_PREFIXES:-app/}
   S3_ARTIFACTS_PREFIX: ${S3_ARTIFACTS_PREFIX:-artifacts/}
   # Контейнеры ходят в S3 по адресу из docker-сети, если он задан, иначе как хост
   S3_ENDPOINT_URL: ${S3_CONTAINER_ENDPOINT_URL:-${S3_ENDPOINT_URL:-}}
@@ -45,6 +46,7 @@ x-airflow-env: &airflow-env
   S3_UPLOAD_PREFIX: ${S3_UPLOAD_PREFIX:-uploads/}
   S3_IMPORT_PREFIX: ${S3_IMPORT_PREFIX:-}
   S3_INDEX_PREFIX: ${S3_INDEX_PREFIX:-index/}
+  S3_REGISTER_PREFIXES: ${S3_REGISTER_PREFIXES:-app/}
   S3_ARTIFACTS_PREFIX: ${S3_ARTIFACTS_PREFIX:-artifacts/}
   # Контейнеры ходят в S3 по адресу из docker-сети, если он задан, иначе как хост
   S3_ENDPOINT_URL: ${S3_CONTAINER_ENDPOINT_URL:-${S3_ENDPOINT_URL:-}}

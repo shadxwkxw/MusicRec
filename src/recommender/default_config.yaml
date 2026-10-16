@@ -15,6 +15,9 @@ storage:
   backend: ${AUDIO_STORAGE:-local}
   s3_bucket: ${S3_BUCKET:-}
   s3_upload_prefix: ${S3_UPLOAD_PREFIX:-uploads/}   # сюда сервис кладёт загруженные через API треки
+  # Под какими префиксами бакета можно регистрировать чужие файлы (POST /tracks/register,
+  # через запятую): ими владеет приложение, сервис их только читает и не удаляет
+  s3_register_prefixes: ${S3_REGISTER_PREFIXES:-app/}
   s3_index_prefix: ${S3_INDEX_PREFIX:-index/}         # копия версий индекса (faiss + joblib)
   s3_artifacts_prefix: ${S3_ARTIFACTS_PREFIX:-artifacts/}  # выгрузки batch recommend и migrate-s3
   s3_endpoint_url: ${S3_ENDPOINT_URL:-}             # пусто — AWS

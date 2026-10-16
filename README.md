@@ -82,7 +82,8 @@ curl http://localhost:8000/automl/status
 | Метод | Путь | Описание |
 |---|---|---|
 | POST | `/tracks/upload` | Загрузить аудио (`file`, `title`, `artist`, `genre`), извлечь признаки |
-| GET | `/tracks` | Список треков (`limit` ≤ 200, `offset`) с флагом `indexed` |
+| POST | `/tracks/register` | Зарегистрировать файл, который приложение уже положило в S3 (`location`, `title`, `artist`, `genre`); см. «Интеграция с приложением» |
+| GET | `/tracks` | Список треков (`limit` ≤ 200, `offset`, `source=import,upload,app`) с флагом `indexed`, источником и `audio_location` (`s3://…`) |
 | PATCH | `/tracks/{id}` | Исправить `title` / `artist` / `genre` |
 | DELETE | `/tracks/{id}` | Удалить трек, его лайки, аудиофайл и запись в индексе |
 | GET | `/tracks/{id}/features` | Сырой вектор признаков |
@@ -181,6 +182,23 @@ make batch-import-playlists PLAYLISTS=playlists PLAYLIST_FOLDERS="chill,electron
 
 На реальных отложенных лайках (`batch evaluate`, путь `user`) результат тот же,
 что у среднего. `evaluate` и `tune` считают путь `user` той же стратегией, что и API.
+
+### Интеграция с приложением
+
+Приложение (например, музыкальный веб-сервис) хранит аудио в том же бакете под
+своим префиксом (`storage.s3_register_prefixes`, по умолчанию `app/`) и
+регистрирует каждый файл: `POST /tracks/register` с
+`{"location": "s3://music/app/<id>.mp3", "title": …, "artist": …}`. Сервис
+читает файл, считает признаки, длительность и жанр из тегов и создаёт трек с
+источником `app`. Файлом владеет приложение: при `DELETE /tracks/{id}` объект
+в S3 остаётся. Повторная регистрация того же файла возвращает существующий
+трек (200), новый — 201. Регистрировать можно только объекты своего бакета под
+разрешёнными префиксами. В режиме `embedding` трек попадает в рекомендации
+после `embed` и `rebuild` (ежедневный DAG).
+
+Каталог для синхронизации — `GET /tracks?source=import,upload,app` постранично:
+у каждого трека `audio_location`, по которому приложение отдаёт файл
+пользователю (например, presigned URL).
 
 ### Мониторинг
 

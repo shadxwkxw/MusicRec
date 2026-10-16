@@ -14,7 +14,18 @@ class TrackResponse(BaseModel):
     created_at: datetime
     indexed: bool = True
     source: str | None = None
-    """upload (через API), import (папка, S3) или fma; скрытые источники — см. hidden_sources."""
+    """upload (через API), import (папка, S3), app (зарегистрирован приложением) или fma."""
+    audio_location: str | None = None
+    """s3://bucket/key, если аудио в S3 (локальные пути наружу не отдаются)."""
+
+
+class TrackRegister(BaseModel):
+    """Файл уже лежит в S3: его владелец — приложение, сервис только читает."""
+
+    location: str = Field(min_length=6, examples=["s3://music/app/123.mp3"])
+    title: str = Field(min_length=1)
+    artist: str = Field(default="Unknown", min_length=1)
+    genre: str | None = Field(default=None, min_length=1)
     """False — трек в БД, но в поисковом индексе ещё нет. Вызови /index/rebuild."""
 
 

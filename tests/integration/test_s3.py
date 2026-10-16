@@ -400,3 +400,83 @@ def test_upload_directory_skips_files_without_audio(s3, audio_files, tmp_path):
 
     assert result.uploaded == ["music/A - Song.wav"]
     assert result.broken == [str(folder / "B - Only Tags.mp3")]
+
+
+# ── Регистрация файлов приложения (POST /tracks/register) ────────
+
+
+def _put_audio(s3, key, source):
+    s3.put_object(Bucket=BUCKET, Key=key, Body=Path(source).read_bytes())
+    return f"s3://{BUCKET}/{key}"
+
+
+async def test_register_reads_s3_file_and_is_idempotent(api, s3, audio_files):
+    location = _put_audio(s3, "app/42.wav", audio_files[0])
+    body = {"location": location, "title": "Мяу", "artist": "Heronwater"}
+
+    first = await api.client.post("/tracks/register", json=body)
+    again = await api.client.post("/tracks/register", json=body)
+
+    assert first.status_code == 201, first.text
+    track = first.json()
+    assert (track["source"], track["audio_location"]) == ("app", location)
+    assert track["duration"] == pytest.approx(3.0, abs=0.1)
+    assert again.status_code == 200
+    assert again.json()["id"] == track["id"]
+    async with api.sessions() as db:
+        assert len((await db.execute(select(TrackORM))).scalars().all()) == 1
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "s3://other-bucket/app/x.wav",  # чужой бакет
+        f"s3://{BUCKET}/music/x.wav",  # каталог — не префикс приложения
+        f"s3://{BUCKET}/uploads/x.wav",  # загрузки самого сервиса
+        "/etc/passwd",
+        "s3://",
+    ],
+)
+async def test_register_only_own_bucket_and_app_prefix(api, s3, location):
+    resp = await api.client.post("/tracks/register", json={"location": location, "title": "x"})
+
+    assert resp.status_code == 422, resp.text
+
+
+async def test_register_missing_object_and_local_backend(api, s3, monkeypatch):
+    body = {"location": f"s3://{BUCKET}/app/nope.wav", "title": "x"}
+
+    assert (await api.client.post("/tracks/register", json=body)).status_code == 404
+    monkeypatch.setattr(settings, "storage_backend", "local")
+    assert (await api.client.post("/tracks/register", json=body)).status_code == 409
+
+
+async def test_deleting_registered_track_keeps_app_file(api, s3, audio_files):
+    location = _put_audio(s3, "app/7.wav", audio_files[1])
+    track = (
+        await api.client.post("/tracks/register", json={"location": location, "title": "t"})
+    ).json()
+
+    assert (await api.client.delete(f"/tracks/{track['id']}")).status_code == 204
+    assert "app/7.wav" in _keys(s3, "app/")  # файлом владеет приложение
+
+
+async def test_catalog_listing_for_sync(api, s3, audio_files):
+    await api.client.post(
+        "/tracks/register",
+        json={"location": _put_audio(s3, "app/1.wav", audio_files[2]), "title": "A"},
+    )
+    s3.upload_file(str(audio_files[3]), BUCKET, "music/B - Song.wav")
+    async with api.sessions() as db:
+        await run_batch_import(s3_import_items("music/"), db)
+        again = await run_batch_import(s3_import_items(""), db)  # app/ уже зарегистрирован
+    assert again.skipped == 2
+
+    listed = (await api.client.get("/tracks", params={"source": "app,import"})).json()
+    only_app = (await api.client.get("/tracks", params={"source": "app"})).json()
+
+    assert {(t["source"], t["audio_location"]) for t in listed} == {
+        ("app", f"s3://{BUCKET}/app/1.wav"),
+        ("import", f"s3://{BUCKET}/music/B - Song.wav"),
+    }
+    assert [t["title"] for t in only_app] == ["A"]
