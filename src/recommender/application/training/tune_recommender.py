@@ -133,6 +133,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
             dimension=normalized.shape[1],
             metric=params["metric"],
             boost_weight=params.get("boost_weight", settings.default_boost_weight),
+            user_boost_weight=params.get("user_boost_weight"),
         )
         ids = track_ids if only is None else only
         engine.add_tracks(ids, normalized[[id_to_idx[t] for t in ids]].copy())
@@ -150,6 +151,9 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
         if mode == "likes":
             params["boost_weight"] = trial.suggest_float(
                 "boost_weight", 0.0, settings.tuning_max_boost_weight
+            )
+            params["user_boost_weight"] = trial.suggest_float(
+                "user_boost_weight", 0.0, settings.tuning_max_boost_weight
             )
             _, normalized, engine = build(params)
             metrics = evaluate(engine, normalized, id_to_idx, train, artists=artists)
@@ -178,12 +182,13 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
 
     normalizer, normalized, engine = build(best)
     if mode == "genre":
-        best["boost_weight"] = (
+        best["boost_weight"], best["user_boost_weight"] = (
             _tune_boost(engine, normalized, id_to_idx, train, artists)
             if has_likes
-            else settings.default_boost_weight
+            else (settings.default_boost_weight, settings.default_boost_weight)
         )
         engine.boost_weight = best["boost_weight"]
+        engine.user_boost_weight = best["user_boost_weight"]
 
     metrics = {
         "objective": mode,
@@ -227,15 +232,18 @@ def _tune_boost(
     id_to_idx: dict[str, int],
     train: dict[str, set[str]],
     artists: dict[str, str],
-) -> float:
-    """Вес буста по leave-one-out на обучающих лайках при готовых параметрах признаков."""
-    best_weight, best_score = 0.0, -1.0
+) -> tuple[float, float]:
+    """Веса буста по leave-one-out на обучающих лайках при готовых параметрах признаков:
+    для пути по треку и для персональных рекомендаций — каждый по MRR своего пути."""
+    best = {"track": (0.0, -1.0), "user": (0.0, -1.0)}
     for weight in np.linspace(0.0, settings.tuning_max_boost_weight, 13):
-        engine.boost_weight = float(weight)
-        score = objective_score(evaluate(engine, normalized, id_to_idx, train, artists=artists))
-        if score > best_score:  # при равенстве остаётся меньший вес
-            best_weight, best_score = float(weight), score
-    return best_weight
+        engine.boost_weight = engine.user_boost_weight = float(weight)
+        metrics = evaluate(engine, normalized, id_to_idx, train, artists=artists)
+        for path in best:
+            score = metrics.get(f"{path}_mrr@{settings.tuning_eval_k}", 0.0)
+            if score > best[path][1]:  # при равенстве остаётся меньший вес
+                best[path] = (float(weight), score)
+    return best["track"][0], best["user"][0]
 
 
 async def create_tuning_run(db: AsyncSession) -> int:

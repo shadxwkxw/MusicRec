@@ -31,7 +31,7 @@ class BuildIndexResult:
     feature_dim: int
 
 
-def _saved_params(dim: int) -> tuple[str, np.ndarray | None, str, float]:
+def _saved_params(dim: int) -> tuple[str, np.ndarray | None, str, float, float]:
     """Параметры из сохранённых артефактов, иначе дефолты.
 
     Если сохранённый индекс другой размерности (сменился источник признаков),
@@ -47,9 +47,10 @@ def _saved_params(dim: int) -> tuple[str, np.ndarray | None, str, float]:
             None,
             settings.default_metric,
             settings.default_boost_weight,
+            settings.default_boost_weight,
         )
     norm, engine = previous.normalizer, previous.engine
-    return norm.method, norm.weights, engine.metric, engine.boost_weight
+    return norm.method, norm.weights, engine.metric, engine.boost_weight, engine.user_boost_weight
 
 
 async def rebuild_index(db: AsyncSession) -> BuildIndexResult:
@@ -67,13 +68,16 @@ async def rebuild_index(db: AsyncSession) -> BuildIndexResult:
     track_ids = list(vectors)
     features = np.stack([vectors[t] for t in track_ids])
 
-    method, weights, metric, boost_weight = _saved_params(features.shape[1])
+    method, weights, metric, boost_weight, user_boost_weight = _saved_params(features.shape[1])
 
     normalizer = FeatureNormalizer(method=method, weights=weights)
     normalized = normalizer.fit_transform(features)
 
     engine = FaissRecommender(
-        dimension=normalized.shape[1], metric=metric, boost_weight=boost_weight
+        dimension=normalized.shape[1],
+        metric=metric,
+        boost_weight=boost_weight,
+        user_boost_weight=user_boost_weight,
     )
     engine.rebuild(track_ids, normalized)
     publish(engine, normalizer)

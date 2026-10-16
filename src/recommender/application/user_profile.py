@@ -102,7 +102,12 @@ def interest_candidates(
 
     def search(query: np.ndarray) -> list[Recommendation]:
         return engine.recommend(
-            query, limit=pool, exclude_ids=exclude_ids, like_boost=like_boost, hidden_ids=hidden_ids
+            query,
+            limit=pool,
+            exclude_ids=exclude_ids,
+            like_boost=like_boost,
+            hidden_ids=hidden_ids,
+            boost_weight=getattr(engine, "user_boost_weight", None),
         )
 
     groups = interest_groups(vectors)

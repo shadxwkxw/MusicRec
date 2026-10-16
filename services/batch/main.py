@@ -195,7 +195,8 @@ async def _tune(args: argparse.Namespace) -> None:
     weights = ", ".join(f"{k[2:]}={v:.2f}" for k, v in params.items() if k.startswith("w_"))
     print(
         f"  params: {params['metric']}, {params['norm_method']}, "
-        f"boost={params['boost_weight']:.2f}" + (f", {weights}" if weights else "")
+        f"boost: track {params['boost_weight']:.2f}, user {params.get('user_boost_weight', params['boost_weight']):.2f}"
+        + (f", {weights}" if weights else "")
     )
     _print_report(result["holdout"], result["test_likes"])
     _print_table("Same-genre share on held-out artists", result["genre_test"], "no genre labels")

@@ -646,3 +646,97 @@ def test_boost_strength_does_not_depend_on_excluded_tracks():
 
     assert shown == ["b", "a"]  # буст лайков поднял b
     assert without_far == shown
+
+
+def test_track_queries_per_target_are_capped_and_stable():
+    from recommender.application.training.evaluation import (
+        MAX_TRACK_QUERIES,
+        leave_one_out_queries,
+    )
+
+    likes = {"big": {f"t{i}" for i in range(50)}, "small": {"a", "b", "c"}}
+    known = likes["big"] | likes["small"]
+
+    queries = leave_one_out_queries(likes, known)
+    again = leave_one_out_queries(likes, known)
+
+    per_target = {}
+    for q in queries:
+        if q.path == "track":
+            per_target.setdefault(q.target, []).append(q.query_ids[0])
+    assert max(len(v) for v in per_target.values()) == MAX_TRACK_QUERIES
+    assert len(per_target["a"]) == 2  # у маленького плейлиста — все остальные лайки
+    assert [q.query_ids for q in queries] == [q.query_ids for q in again]
+    assert sum(q.path == "user" for q in queries) == 53  # по одному на каждый лайк
+
+
+def test_user_boost_weight_is_saved_and_old_indexes_fall_back(tmp_path):
+    import joblib
+    import numpy as np
+
+    from recommender.infrastructure.storage.faiss_index import FaissRecommender
+
+    engine = FaissRecommender(dimension=2, metric="cosine", boost_weight=0.0, user_boost_weight=1.5)
+    engine.add_tracks(["a"], np.ones((1, 2), np.float32))
+    engine.save(tmp_path)
+    loaded = FaissRecommender.load(tmp_path)
+    assert (loaded.boost_weight, loaded.user_boost_weight) == (0.0, 1.5)
+
+    meta = joblib.load(tmp_path / "meta.joblib")
+    del meta["user_boost_weight"]  # индекс, сохранённый до раздельных весов
+    meta["boost_weight"] = 0.7
+    joblib.dump(meta, tmp_path / "meta.joblib")
+    old = FaissRecommender.load(tmp_path)
+    assert (old.boost_weight, old.user_boost_weight) == (0.7, 0.7)
+
+
+def test_boost_weight_override_and_zero_weight():
+    import numpy as np
+
+    from recommender.infrastructure.storage.faiss_index import FaissRecommender
+
+    engine = FaissRecommender(dimension=2, metric="cosine", boost_weight=0.0)
+    engine.add_tracks(["a", "b", "far"], np.array([[1, 0.05], [0.9, 0.4], [-1, 0]], np.float32))
+    query = np.array([1.0, 0.0], np.float32)
+
+    plain = [r.track_id for r in engine.recommend(query, limit=2, like_boost={"b": 1.0})]
+    boosted = [
+        r.track_id
+        for r in engine.recommend(query, limit=2, like_boost={"b": 1.0}, boost_weight=2.0)
+    ]
+
+    assert plain == ["a", "b"]  # вес 0 — буст выключен
+    assert boosted == ["b", "a"]
+
+
+def test_personal_recommendations_use_the_user_weight():
+    import numpy as np
+
+    from recommender.application.user_profile import interest_candidates
+
+    calls = []
+
+    class Engine:
+        user_boost_weight = 1.25
+
+        def recommend(self, query, **kwargs):
+            calls.append(kwargs["boost_weight"])
+            return []
+
+    interest_candidates(Engine(), np.ones((2, 4), np.float32), 5, set(), like_boost={"x": 1.0})
+
+    assert calls and set(calls) == {1.25}
+
+
+def test_boost_weights_are_tuned_per_path(monkeypatch):
+    from recommender.application.training import tune_recommender as T
+
+    def fake_evaluate(engine, *args, **kwargs):
+        w = engine.boost_weight
+        return {"track_mrr@10": 1 - w, "user_mrr@10": 1 - abs(w - 1.5)}  # трек: 0, польз.: 1.5
+
+    monkeypatch.setattr(T, "evaluate", fake_evaluate)
+    monkeypatch.setattr(T.settings, "tuning_max_boost_weight", 3.0)
+    engine = type("E", (), {"boost_weight": 0.0, "user_boost_weight": 0.0})()
+
+    assert T._tune_boost(engine, None, {}, {}, {}) == (0.0, 1.5)

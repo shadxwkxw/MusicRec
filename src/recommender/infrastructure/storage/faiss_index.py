@@ -26,6 +26,7 @@ class FaissRecommender(Recommender):
         metric: Metric | None = None,
         boost_weight: float | None = None,
         source: str | None = None,
+        user_boost_weight: float | None = None,
     ):
         self.dimension = dimension or settings.feature_dim
         # Из чего собраны векторы индекса (settings.feature_source_id): индекс
@@ -34,6 +35,11 @@ class FaissRecommender(Recommender):
         self.version: str | None = None  # id версии на диске (storage/artifacts.py)
         self.metric = metric or settings.default_metric
         self.boost_weight = settings.default_boost_weight if boost_weight is None else boost_weight
+        # Персональным рекомендациям лайки помогают, а похожим на трек — нет (на плейлистах
+        # буст там вредил при любой нормировке), поэтому вес у путей свой
+        self.user_boost_weight = (
+            self.boost_weight if user_boost_weight is None else user_boost_weight
+        )
         self.index = self._new_index()
         self.track_ids: list[str] = []
 
@@ -60,9 +66,13 @@ class FaissRecommender(Recommender):
         exclude_ids: set[str] | None = None,
         like_boost: dict[str, float] | None = None,
         hidden_ids: set[str] | None = None,
+        boost_weight: float | None = None,
     ) -> list[Recommendation]:
         if self.index.ntotal == 0:
             return []
+        weight = self.boost_weight if boost_weight is None else boost_weight
+        if not weight:
+            like_boost = None  # без веса буст не нужен — и полный проход индекса тоже
 
         query = query_features.reshape(1, -1).astype(np.float32)
         if self.metric == "cosine":
@@ -96,7 +106,7 @@ class FaissRecommender(Recommender):
         results: list[Recommendation] = []
         for track_id, score in candidates:
             if like_boost and track_id in like_boost:
-                bonus = like_boost[track_id] * self.boost_weight * scale
+                bonus = like_boost[track_id] * weight * scale
                 # cosine: больше = ближе, L2: меньше = ближе
                 score = score + bonus if self.metric == "cosine" else score - bonus
             results.append(Recommendation(track_id=track_id, score=score))
@@ -148,6 +158,7 @@ class FaissRecommender(Recommender):
                 "metric": self.metric,
                 "dim": self.dimension,
                 "boost_weight": self.boost_weight,
+                "user_boost_weight": self.user_boost_weight,
                 "source": self.source,
             },
             path / "meta.joblib",
@@ -161,6 +172,7 @@ class FaissRecommender(Recommender):
             dimension=meta["dim"],
             metric=meta["metric"],
             boost_weight=meta.get("boost_weight", settings.default_boost_weight),
+            user_boost_weight=meta.get("user_boost_weight"),
             source=meta.get("source", "librosa"),
         )
         engine.index = faiss.read_index(str(path / "faiss.index"))

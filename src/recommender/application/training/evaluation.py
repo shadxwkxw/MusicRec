@@ -40,6 +40,10 @@ from recommender.infrastructure.storage.postgres import TrackORM
 
 PATHS = ("track", "user")
 MACRO_MIN_TRACKS = 3  # жанры с меньшим числом запросов в macro не входят: слишком шумно
+# Путь track: на каждый спрятанный лайк — запросы от стольких других лайков (случайных,
+# но одних и тех же при каждом запуске). Без ограничения число запросов растёт как
+# квадрат размера плейлиста: на плейлисте из 200 треков — десятки тысяч на попытку тюнинга
+MAX_TRACK_QUERIES = 10
 UserLikes = Mapping[str, set[str]]
 
 
@@ -82,7 +86,10 @@ def split_likes(
 
 
 def _queries_for(seen: tuple[str, ...], target: str, visible_likes: UserLikes) -> list[Query]:
-    track_queries = [Query("track", (q,), frozenset({q}), target, visible_likes) for q in seen]
+    sources = seen
+    if len(seen) > MAX_TRACK_QUERIES:
+        sources = tuple(sorted(random.Random(target).sample(seen, MAX_TRACK_QUERIES)))
+    track_queries = [Query("track", (q,), frozenset({q}), target, visible_likes) for q in sources]
     return [*track_queries, Query("user", seen, frozenset(seen), target, visible_likes)]
 
 
