@@ -46,12 +46,15 @@ def interest_groups(
 
     unit = vectors / np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-12)
     groups: list[list[int]] = [[i] for i in range(len(unit))]
-    sums = [unit[i].copy() for i in range(len(unit))]
+    # Суммы и центры групп — матрицами: при слиянии меняется одна строка, а не
+    # пересчитываются центры всех групп (у пользователя с сотнями лайков это было
+    # O(n²) вызовов на Python — основное время тюнинга по лайкам)
+    sums = unit.copy()
 
-    def centre(k: int) -> np.ndarray:
-        return sums[k] / max(float(np.linalg.norm(sums[k])), 1e-12)
+    def centre(v: np.ndarray) -> np.ndarray:
+        return v / max(float(np.linalg.norm(v)), 1e-12)
 
-    centres = np.stack([centre(k) for k in range(len(groups))]) if groups else unit
+    centres = np.stack([centre(sums[k]) for k in range(len(groups))]) if groups else unit
     sim = centres @ centres.T
     np.fill_diagonal(sim, -np.inf)
 
@@ -66,10 +69,13 @@ def interest_groups(
                 break
         i, j = min(i, j), max(i, j)
         groups[i] += groups.pop(j)
-        sums[i] = sums[i] + sums.pop(j)
+        sums[i] = sums[i] + sums[j]
+        sums = np.delete(sums, j, axis=0)
+        centres = np.delete(centres, j, axis=0)
         sim = np.delete(np.delete(sim, j, axis=0), j, axis=1)
-        merged = centre(i)
-        row = np.stack([centre(k) for k in range(len(groups))]) @ merged
+        merged = centre(sums[i])
+        centres[i] = merged
+        row = centres @ merged
         row[i] = -np.inf
         sim[i, :] = row
         sim[:, i] = row

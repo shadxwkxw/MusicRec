@@ -91,31 +91,61 @@ class FaissRecommender(Recommender):
         )
         distances, indices = self.index.search(query, search_k)
 
-        found = [
-            (self.track_ids[idx], float(dist))
-            for dist, idx in zip(distances[0], indices[0], strict=True)
-            if 0 <= idx < len(self.track_ids) and self.track_ids[idx] not in exclude_ids
-        ]
-        candidates = [(tid, score) for tid, score in found if tid not in hidden_ids]
-        scale = (
-            self._boost_scale([s for _, s in candidates], [s for _, s in found])
-            if like_boost
-            else 0.0
+        # Дальше — массивами, без цикла по трекам: при like_boost это весь индекс
+        # на каждый запрос, и поштучный перебор на Python занимал почти всё время
+        # тюнинга. Позиции в индексе = позиции в track_ids.
+        positions = indices[0]
+        scores = distances[0].astype(np.float64)
+        keep = (positions >= 0) & (positions < len(self.track_ids))
+        if exclude_ids:
+            keep &= ~np.isin(positions, self._positions_of(exclude_ids))
+        positions, scores = positions[keep], scores[keep]  # found: всё, кроме исключённых
+
+        candidate = (
+            ~np.isin(positions, self._positions_of(hidden_ids))
+            if hidden_ids
+            else np.ones(len(positions), dtype=bool)
         )
+        found_scores = scores
+        positions, scores = positions[candidate], scores[candidate]
 
-        results: list[Recommendation] = []
-        for track_id, score in candidates:
-            if like_boost and track_id in like_boost:
-                bonus = like_boost[track_id] * weight * scale
-                # cosine: больше = ближе, L2: меньше = ближе
-                score = score + bonus if self.metric == "cosine" else score - bonus
-            results.append(Recommendation(track_id=track_id, score=score))
+        if like_boost and len(positions):
+            scale = self._boost_scale(scores, found_scores)
+            boost = np.zeros(len(self.track_ids))
+            boosted = [
+                (i, v) for t, v in like_boost.items() if (i := self._position(t)) is not None
+            ]
+            if boosted:
+                at, values = zip(*boosted, strict=True)
+                boost[list(at)] = values
+            bonus = boost[positions] * weight * scale
+            # cosine: больше = ближе, L2: меньше = ближе
+            scores = scores + bonus if self.metric == "cosine" else scores - bonus
 
-        # Для cosine больше = лучше, для L2 меньше = лучше
-        results.sort(key=lambda r: r.score, reverse=(self.metric == "cosine"))
-        return results[:limit]
+        # Для cosine больше = лучше, для L2 меньше = лучше; stable — равные скоры
+        # остаются в порядке поиска, как при сортировке списка
+        order = np.argsort(-scores if self.metric == "cosine" else scores, kind="stable")[:limit]
+        return [
+            Recommendation(track_id=self.track_ids[positions[i]], score=float(scores[i]))
+            for i in order
+        ]
 
-    def _boost_scale(self, candidates: list[float], everything: list[float]) -> float:
+    def _position_map(self) -> dict[str, int]:
+        """{track_id: позиция}; пересчитывается, когда track_ids заменили или дополнили."""
+        key = (id(self.track_ids), len(self.track_ids))
+        if getattr(self, "_position_key", None) != key:
+            self._positions = {tid: i for i, tid in enumerate(self.track_ids)}
+            self._position_key = key
+        return self._positions
+
+    def _position(self, track_id: str) -> int | None:
+        return self._position_map().get(track_id)
+
+    def _positions_of(self, track_ids: set[str]) -> np.ndarray:
+        known = self._position_map()
+        return np.fromiter((known[t] for t in track_ids if t in known), dtype=np.int64)
+
+    def _boost_scale(self, candidates: np.ndarray, everything: np.ndarray) -> float:
         """Разрыв между ближайшим кандидатом и типичным треком: единица измерения буста.
 
         Масштаб скоров зависит от метрики, нормализации и весов признаков
@@ -126,9 +156,9 @@ class FaissRecommender(Recommender):
         (hidden_ids): иначе скрытые источники (тысячи далёких треков FMA)
         поднимали медиану и ослабляли буст в разы.
         """
-        if not candidates:
+        if not len(candidates):
             return 0.0
-        best = max(candidates) if self.metric == "cosine" else min(candidates)
+        best = float(np.max(candidates)) if self.metric == "cosine" else float(np.min(candidates))
         gap = abs(float(np.median(everything)) - best)
         return gap if gap > 0 else 1.0
 

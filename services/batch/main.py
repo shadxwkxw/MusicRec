@@ -33,6 +33,7 @@ Examples:
 
 import argparse
 import asyncio
+import logging
 from pathlib import Path
 
 from recommender.application.batch_embed import count_missing_embeddings, run_batch_embed
@@ -456,6 +457,10 @@ def main() -> None:
     p_covers.set_defaults(func=_extract_covers)
 
     args = parser.parse_args()
+    # Шаги долгих команд (tune) — в stderr с временем: в Airflow это лог задачи
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    for noisy in ("botocore", "boto3", "s3transfer", "urllib3", "httpx", "faiss"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     asyncio.run(args.func(args))
 
 

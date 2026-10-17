@@ -750,3 +750,19 @@ def test_id3_tag_size():
     assert id3_tag_size(b"ID3\x04\x00\x10\x00\x00\x00\x7f") == 10 + 127 + 10  # с подвалом
     assert id3_tag_size(b"\xff\xfb\x90\x00" + b"\x00" * 6) is None
     assert id3_tag_size(b"ID3") is None
+
+
+def test_track_positions_follow_index_changes():
+    """Кэш позиций треков (для исключений и буста) обновляется при add/remove."""
+    engine = FaissRecommender(dimension=2, metric="cosine")
+    engine.add_tracks(["a", "b"], np.array([[1.0, 0.0], [0.9, 0.1]], dtype=np.float32))
+    query = np.array([1.0, 0.0], dtype=np.float32)
+    assert [r.track_id for r in engine.recommend(query, limit=5, exclude_ids={"a"})] == ["b"]
+
+    engine.add_tracks(["c"], np.array([[0.95, 0.05]], dtype=np.float32))
+    assert [r.track_id for r in engine.recommend(query, limit=5, exclude_ids={"a", "c"})] == ["b"]
+
+    engine.remove_tracks({"a"})
+    boosted = engine.recommend(query, limit=5, like_boost={"b": 1.0}, boost_weight=10)
+    assert [r.track_id for r in boosted] == ["b", "c"]
+    assert [r.track_id for r in engine.recommend(query, limit=5, hidden_ids={"c"})] == ["b"]

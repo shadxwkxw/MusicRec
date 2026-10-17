@@ -23,6 +23,8 @@
 """
 
 import json
+import logging
+import time
 from collections.abc import Sequence
 
 import numpy as np
@@ -48,6 +50,9 @@ from recommender.infrastructure.data_processing.normalize import FeatureNormaliz
 from recommender.infrastructure.storage.artifacts import publish
 from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import AutoMLRunORM, TrackORM, utcnow
+
+# Шаги тюнинга — в лог (в Airflow видно, на каком шаге задача и что она жива)
+logger = logging.getLogger(__name__)
 
 # Индексы групп признаков в 82-мерном векторе
 FEATURE_GROUPS = {
@@ -113,6 +118,13 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
         list(genres), artists, settings.tuning_test_fraction, settings.tuning_seed, genres
     )
 
+    logger.info(
+        "Tuning: %d tracks, %s objective, %d users with likes, %d trials",
+        len(track_ids),
+        mode,
+        len(train),
+        settings.automl_n_trials,
+    )
     run = await db.get(AutoMLRunORM, run_id)
     if run is None:
         raise ValueError(f"AutoML run {run_id} not found")
@@ -179,6 +191,7 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     )
     study.optimize(objective, n_trials=settings.automl_n_trials, timeout=settings.automl_timeout)
     best = dict(study.best_params)
+    logger.info("Tuning: %d trials done, best %.4f %s", len(study.trials), study.best_value, best)
 
     normalizer, normalized, engine = build(best)
     if mode == "genre":
@@ -190,6 +203,8 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
         engine.boost_weight = best["boost_weight"]
         engine.user_boost_weight = best["user_boost_weight"]
 
+    logger.info("Tuning: held-out report (likes and genres)")
+    started = time.perf_counter()
     metrics = {
         "objective": mode,
         "genre_catalog": catalog,
@@ -208,6 +223,8 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
         ),
     }
 
+    logger.info("Tuning: held-out report done in %.0fs", time.perf_counter() - started)
+
     run.status = "completed"
     run.best_score = study.best_value
     run.best_params = json.dumps(best)
@@ -216,7 +233,9 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     run.completed_at = utcnow()
     await db.commit()
 
+    logger.info("Tuning: publishing the index")
     publish(engine, normalizer)
+    logger.info("Tuning: run %d completed", run_id)
 
     return {
         "best_score": study.best_value,
@@ -236,13 +255,30 @@ def _tune_boost(
     """Веса буста по leave-one-out на обучающих лайках при готовых параметрах признаков:
     для пути по треку и для персональных рекомендаций — каждый по MRR своего пути."""
     best = {"track": (0.0, -1.0), "user": (0.0, -1.0)}
-    for weight in np.linspace(0.0, settings.tuning_max_boost_weight, 13):
+    weights = np.linspace(0.0, settings.tuning_max_boost_weight, 13)
+    k = settings.tuning_eval_k
+    for step, weight in enumerate(weights, start=1):
+        started = time.perf_counter()
         engine.boost_weight = engine.user_boost_weight = float(weight)
         metrics = evaluate(engine, normalized, id_to_idx, train, artists=artists)
         for path in best:
-            score = metrics.get(f"{path}_mrr@{settings.tuning_eval_k}", 0.0)
+            score = metrics.get(f"{path}_mrr@{k}", 0.0)
             if score > best[path][1]:  # при равенстве остаётся меньший вес
                 best[path] = (float(weight), score)
+        logger.info(
+            "Tuning: boost weight %d/%d = %.2f: track MRR@%d %.4f, user MRR@%d %.4f (%.0fs)",
+            step,
+            len(weights),
+            weight,
+            k,
+            metrics.get(f"track_mrr@{k}", 0.0),
+            k,
+            metrics.get(f"user_mrr@{k}", 0.0),
+            time.perf_counter() - started,
+        )
+    logger.info(
+        "Tuning: boost weights chosen: track %.2f, user %.2f", best["track"][0], best["user"][0]
+    )
     return best["track"][0], best["user"][0]
 
 

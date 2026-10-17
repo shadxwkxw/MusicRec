@@ -178,8 +178,10 @@ def recommender_daily():
     tags=["recommender"],
 )
 def recommender_weekly_tuning():
-    tune = batch("tune", "tune")
-    evaluate = batch("evaluate", "evaluate")
+    # Предохранитель: обычно тюнинг — минуты; зависший запуск снимается и
+    # повторяется (retries), а не висит до следующего воскресенья
+    tune = batch("tune", "tune", execution_timeout=pendulum.duration(hours=2))
+    evaluate = batch("evaluate", "evaluate", execution_timeout=pendulum.duration(hours=1))
     tune >> reload_online_index() >> evaluate
 
 
