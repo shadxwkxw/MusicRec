@@ -96,6 +96,7 @@ class Settings(BaseModel):
     default_metric: Metric
     default_norm_method: NormMethod
     default_boost_weight: float = Field(ge=0)
+    fixed_user_boost_weight: float | None = Field(default=None, ge=0)
     # Tuning
     automl_n_trials: int = Field(ge=1)
     automl_timeout: int = Field(ge=1)
@@ -253,6 +254,12 @@ def _build_settings(raw: dict) -> Settings:
         default_metric=raw["recommendation"]["default_metric"],
         default_norm_method=raw["recommendation"]["default_norm_method"],
         default_boost_weight=raw["recommendation"]["default_boost_weight"],
+        # пусто — подбирает тюнинг; 0 — тоже значение (буст выключен)
+        fixed_user_boost_weight=(
+            None
+            if raw["recommendation"].get("user_boost_weight") in ("", None)
+            else raw["recommendation"]["user_boost_weight"]
+        ),
         automl_n_trials=raw["tuning"]["n_trials"],
         automl_timeout=raw["tuning"]["timeout"],
         tuning_eval_k=raw["tuning"]["eval_k"],

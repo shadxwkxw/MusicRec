@@ -766,3 +766,18 @@ def test_track_positions_follow_index_changes():
     boosted = engine.recommend(query, limit=5, like_boost={"b": 1.0}, boost_weight=10)
     assert [r.track_id for r in boosted] == ["b", "c"]
     assert [r.track_id for r in engine.recommend(query, limit=5, hidden_ids={"c"})] == ["b"]
+
+
+def test_fixed_user_boost_weight_overrides_saved_one(tmp_path, monkeypatch):
+    from recommender.config import settings
+
+    engine = FaissRecommender(dimension=2, boost_weight=0.0, user_boost_weight=0.75)
+    engine.add_tracks(["a"], np.array([[1.0, 0.0]], dtype=np.float32))
+    engine.save(tmp_path)
+
+    monkeypatch.setattr(settings, "fixed_user_boost_weight", 2.25)
+    loaded = FaissRecommender.load(tmp_path)
+    assert (loaded.boost_weight, loaded.user_boost_weight) == (0.0, 2.25)
+
+    monkeypatch.setattr(settings, "fixed_user_boost_weight", None)
+    assert FaissRecommender.load(tmp_path).user_boost_weight == 0.75  # пусто — сохранённый

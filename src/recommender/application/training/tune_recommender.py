@@ -164,8 +164,10 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
             params["boost_weight"] = trial.suggest_float(
                 "boost_weight", 0.0, settings.tuning_max_boost_weight
             )
-            params["user_boost_weight"] = trial.suggest_float(
-                "user_boost_weight", 0.0, settings.tuning_max_boost_weight
+            params["user_boost_weight"] = (
+                settings.fixed_user_boost_weight
+                if settings.fixed_user_boost_weight is not None
+                else trial.suggest_float("user_boost_weight", 0.0, settings.tuning_max_boost_weight)
             )
             _, normalized, engine = build(params)
             metrics = evaluate(engine, normalized, id_to_idx, train, artists=artists)
@@ -191,6 +193,8 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
     )
     study.optimize(objective, n_trials=settings.automl_n_trials, timeout=settings.automl_timeout)
     best = dict(study.best_params)
+    if mode == "likes" and settings.fixed_user_boost_weight is not None:
+        best["user_boost_weight"] = settings.fixed_user_boost_weight  # не подбирался
     logger.info("Tuning: %d trials done, best %.4f %s", len(study.trials), study.best_value, best)
 
     normalizer, normalized, engine = build(best)
@@ -200,6 +204,8 @@ async def run_tuning(db: AsyncSession, run_id: int) -> dict:
             if has_likes
             else (settings.default_boost_weight, settings.default_boost_weight)
         )
+        if settings.fixed_user_boost_weight is not None:
+            best["user_boost_weight"] = settings.fixed_user_boost_weight
         engine.boost_weight = best["boost_weight"]
         engine.user_boost_weight = best["user_boost_weight"]
 
@@ -276,8 +282,11 @@ def _tune_boost(
             metrics.get(f"user_mrr@{k}", 0.0),
             time.perf_counter() - started,
         )
+    fixed = settings.fixed_user_boost_weight
     logger.info(
-        "Tuning: boost weights chosen: track %.2f, user %.2f", best["track"][0], best["user"][0]
+        "Tuning: boost weights chosen: track %.2f, user %s",
+        best["track"][0],
+        f"{best['user'][0]:.2f}" if fixed is None else f"{fixed:.2f} (fixed in config)",
     )
     return best["track"][0], best["user"][0]
 

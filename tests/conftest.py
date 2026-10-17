@@ -11,3 +11,6 @@ for name in ("API_KEY", "API_PROTECT_READS", "CORS_ORIGINS"):  # доступ �
     os.environ.pop(name, None)
 # Настоящую модель CLAP тесты не грузят; тесты фонового эмбеддинга включают его с подделкой
 os.environ["EMBED_NEW_TRACKS"] = "false"
+# Вес лайков персональных рекомендаций — подбирается (как без конфига); фиксированный
+# вес проверяют отдельные тесты
+os.environ["USER_BOOST_WEIGHT"] = ""

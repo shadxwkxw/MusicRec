@@ -477,3 +477,21 @@ async def test_user_profile_uses_only_recent_likes(api, monkeypatch):
     rec_ids = [r["track_id"] for r in recs["recommendations"]]
     assert sorted(rec_ids) == sorted(ids[1:5])  # старый лайк по-прежнему не рекомендуется
     assert rec_ids == [r["track_id"] for r in by_last["recommendations"] if r["track_id"] != ids[0]]
+
+
+async def test_fixed_user_boost_weight_is_kept_by_tuning_and_saved_index(api, monkeypatch):
+    from recommender.infrastructure.storage.artifacts import load_current
+
+    monkeypatch.setattr(settings, "fixed_user_boost_weight", 2.25)
+    ids = await api.seed(6)
+    for tid in ids[0:3]:
+        await api.like("u1", tid)
+    for tid in ids[1:4]:
+        await api.like("u2", tid)
+
+    run = await _run_tuning(api)
+
+    assert run["status"] == "completed"
+    assert run["best_params"]["user_boost_weight"] == 2.25
+    assert app.state.engine.user_boost_weight == 2.25
+    assert load_current().engine.user_boost_weight == 2.25

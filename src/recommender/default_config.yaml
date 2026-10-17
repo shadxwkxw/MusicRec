@@ -66,6 +66,10 @@ recommendation:
   default_metric: cosine         # cosine | euclidean
   default_norm_method: standard  # standard | minmax | robust
   default_boost_weight: 0.3      # вес co-like буста в долях разрыва «ближайший — типичный трек»
+  # Вес лайков в персональных рекомендациях (миксы приложения) — фиксированный:
+  # тюнинг его не подбирает, сохранённый в индексе вес не действует. На плейлистах
+  # 2.25 поднимал user hit@10 с 0.153 до 0.222. Пусто — вес подбирает тюнинг
+  user_boost_weight: ${USER_BOOST_WEIGHT:-2.25}
 
 observability:
   log_level: ${LOG_LEVEL:-INFO}

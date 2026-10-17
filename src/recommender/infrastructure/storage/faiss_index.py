@@ -36,10 +36,14 @@ class FaissRecommender(Recommender):
         self.metric = metric or settings.default_metric
         self.boost_weight = settings.default_boost_weight if boost_weight is None else boost_weight
         # Персональным рекомендациям лайки помогают, а похожим на трек — нет (на плейлистах
-        # буст там вредил при любой нормировке), поэтому вес у путей свой
-        self.user_boost_weight = (
-            self.boost_weight if user_boost_weight is None else user_boost_weight
-        )
+        # буст там вредил при любой нормировке), поэтому вес у путей свой. Вес из
+        # конфига (recommendation.user_boost_weight) главнее сохранённого и подобранного
+        if settings.fixed_user_boost_weight is not None:
+            self.user_boost_weight = settings.fixed_user_boost_weight
+        else:
+            self.user_boost_weight = (
+                self.boost_weight if user_boost_weight is None else user_boost_weight
+            )
         self.index = self._new_index()
         self.track_ids: list[str] = []
 
