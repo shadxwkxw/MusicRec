@@ -11,6 +11,8 @@
     RECOMMENDER_DOCKER_URL   Docker API (через docker-socket-proxy)
     DB_URL, FEATURE_SOURCE   передаются в batch-контейнеры как есть
     AUDIO_STORAGE, S3_*, AWS_* — хранилище аудио, тоже как есть
+    APP_SYNC_URL, APP_SYNC_TOKEN — синхронизация каталога веб-приложения после
+                             импорта (POST с X-Sync-Token); без адреса шаг пропускается
 """
 
 import json
@@ -20,6 +22,11 @@ import urllib.request
 
 import pendulum
 from airflow.providers.docker.operators.docker import DockerOperator
+
+try:  # Airflow 3: исключения task SDK
+    from airflow.sdk.exceptions import AirflowSkipException
+except ImportError:
+    from airflow.exceptions import AirflowSkipException
 from airflow.sdk import dag, task
 from docker.types import Mount
 
@@ -108,6 +115,24 @@ def reload_online_index() -> dict:
     return result
 
 
+@task
+def sync_app_catalog() -> dict:
+    """Новые треки и обложки — в каталог веб-приложения, там же пересобираются подборки
+    артистов. Приложение само забирает каталог у рекомендателя (GET /tracks)."""
+    url = os.environ.get("APP_SYNC_URL")
+    if not url:
+        raise AirflowSkipException("APP_SYNC_URL is not set: no web app to sync")
+    headers = {"X-Sync-Token": os.environ.get("APP_SYNC_TOKEN", "")}
+    request = urllib.request.Request(url, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=600) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"app sync failed: {e.code} {e.read().decode()}") from e
+    print(f"web app catalog synced: {result}")
+    return result
+
+
 @task.branch
 def choose_feature_step() -> str:
     """Эмбеддинги досчитываем только в режиме embedding (нужен образ с torch)."""
@@ -116,7 +141,7 @@ def choose_feature_step() -> str:
 
 @dag(
     dag_id="recommender_daily",
-    description="Импорт новых треков (S3 или data/inbox), признаки, индекс, рекомендации",
+    description="Импорт новых треков (S3 или data/inbox), признаки, индекс, рекомендации, каталог приложения",
     schedule="0 3 * * *",
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
@@ -139,7 +164,7 @@ def recommender_daily():
 
     import_new >> covers >> choose_feature_step() >> [embed, rebuild]
     embed >> rebuild
-    rebuild >> reload_online_index() >> recommend
+    rebuild >> reload_online_index() >> [recommend, sync_app_catalog()]
 
 
 @dag(

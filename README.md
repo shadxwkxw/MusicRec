@@ -432,7 +432,7 @@ make batch-recommend OUTPUT=artifacts/recs.parquet TOP_N=10
 
 | DAG | Когда | Шаги |
 |---|---|---|
-| `recommender_daily` | каждый день в 03:00 UTC | `extract` из `data/inbox` → `embed` (только при `FEATURE_SOURCE=embedding`) → `rebuild` → `/index/reload` → `recommend --use-likes` в `artifacts/recs_<дата>.parquet` |
+| `recommender_daily` | каждый день в 03:00 UTC | `extract` из `data/inbox` → `embed` (только при `FEATURE_SOURCE=embedding`) → `rebuild` → `/index/reload` → `recommend --use-likes` в `artifacts/recs_<дата>.parquet` и параллельно `sync_app_catalog`: `POST APP_SYNC_URL` с `X-Sync-Token: APP_SYNC_TOKEN` — веб-приложение забирает новые треки и пересобирает подборки артистов (без `APP_SYNC_URL` шаг пропускается) |
 | `recommender_weekly_tuning` | по воскресеньям в 04:00 UTC | `tune` → `/index/reload` → `evaluate` |
 
 ```bash
