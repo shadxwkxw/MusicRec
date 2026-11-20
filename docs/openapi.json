@@ -172,6 +172,112 @@
         "title": "LikeResponse",
         "type": "object"
       },
+      "PlaybackEventRequest": {
+        "description": "Одно событие показа или прослушивания; event_id делает повтор запроса безопасным.",
+        "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "event_type": {
+            "enum": [
+              "impression",
+              "play_start",
+              "progress",
+              "skip",
+              "complete",
+              "repeat"
+            ],
+            "title": "Event Type",
+            "type": "string"
+          },
+          "played_ms": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Played Ms",
+            "type": "integer"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "track_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Track Id",
+            "type": "string"
+          },
+          "user_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "track_id",
+          "event_type"
+        ],
+        "title": "PlaybackEventRequest",
+        "type": "object"
+      },
+      "PlaybackEventResponse": {
+        "properties": {
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "exists"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "status"
+        ],
+        "title": "PlaybackEventResponse",
+        "type": "object"
+      },
       "RecommendationItem": {
         "properties": {
           "artist": {
@@ -584,6 +690,50 @@
           }
         ],
         "summary": "Start Tuning"
+      }
+    },
+    "/events": {
+      "post": {
+        "description": "Записать показ или событие плеера. Повтор с тем же event_id идемпотентен.",
+        "operationId": "record_playback_event_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaybackEventRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaybackEventResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Record Playback Event"
       }
     },
     "/health/live": {

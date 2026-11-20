@@ -1,6 +1,8 @@
 """Pydantic-DTO для REST API."""
 
 from datetime import datetime
+from typing import Literal
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
@@ -78,6 +80,24 @@ class LikeResponse(BaseModel):
     status: str  # ok — лайк добавлен, exists — уже был
     user_id: str
     track_id: str
+
+
+class PlaybackEventRequest(BaseModel):
+    """Одно событие показа или прослушивания; event_id делает повтор запроса безопасным."""
+
+    event_id: UUID = Field(default_factory=uuid4)
+    user_id: str = Field(min_length=1, max_length=255)
+    track_id: str = Field(min_length=1, max_length=255)
+    event_type: Literal["impression", "play_start", "progress", "skip", "complete", "repeat"]
+    played_ms: int = Field(default=0, ge=0)
+    duration_ms: int | None = Field(default=None, gt=0)
+    context: str | None = Field(default=None, max_length=100)
+    position: int | None = Field(default=None, ge=1)
+
+
+class PlaybackEventResponse(BaseModel):
+    event_id: UUID
+    status: Literal["ok", "exists"]
 
 
 class AutoMLStatusResponse(BaseModel):

@@ -74,6 +74,7 @@ from recommender.infrastructure.storage.faiss_index import FaissRecommender
 from recommender.infrastructure.storage.postgres import (
     AutoMLRunORM,
     LikeORM,
+    PlaybackEventORM,
     TrackEmbeddingORM,
     TrackORM,
     async_session,
@@ -85,6 +86,8 @@ from recommender.interfaces.online.schemas import (
     AutoMLStatusResponse,
     LikeRequest,
     LikeResponse,
+    PlaybackEventRequest,
+    PlaybackEventResponse,
     RecommendationItem,
     RecommendationResponse,
     SearchResponse,
@@ -607,6 +610,37 @@ async def get_user_recommendations(
 # ──────────────────────────────────────────
 # Likes
 # ──────────────────────────────────────────
+
+
+@writes.post("/events", response_model=PlaybackEventResponse)
+async def record_playback_event(
+    data: PlaybackEventRequest, db: AsyncSession = Depends(get_db)
+):
+    """Записать показ или событие плеера. Повтор с тем же event_id идемпотентен."""
+    if await db.get(PlaybackEventORM, str(data.event_id)):
+        return PlaybackEventResponse(event_id=data.event_id, status="exists")
+    if not await db.get(TrackORM, data.track_id):
+        raise HTTPException(404, "Track not found")
+    db.add(
+        PlaybackEventORM(
+            event_id=str(data.event_id),
+            user_id=data.user_id,
+            track_id=data.track_id,
+            event_type=data.event_type,
+            played_ms=data.played_ms,
+            duration_ms=data.duration_ms,
+            context=data.context,
+            position=data.position,
+        )
+    )
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        if await db.get(PlaybackEventORM, str(data.event_id)):
+            return PlaybackEventResponse(event_id=data.event_id, status="exists")
+        raise
+    return PlaybackEventResponse(event_id=data.event_id, status="ok")
 
 
 def _like_query(user_id: str, track_id: str):

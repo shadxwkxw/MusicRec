@@ -98,6 +98,7 @@ curl http://localhost:8000/automl/status
 | POST | `/likes` | Лайк `{"user_id", "track_id"}`; повторный — `status: exists` |
 | DELETE | `/likes/{user_id}/{track_id}` | Убрать лайк |
 | GET | `/users/{user_id}/likes` | Лайкнутые треки, сначала последние (`limit`, `offset`) |
+| POST | `/events` | Записать показ или событие плеера (`impression`, `play_start`, `progress`, `skip`, `complete`, `repeat`) |
 | POST | `/automl/train` | Запустить тюнинг в фоне |
 | GET | `/automl/status` | Запуски тюнинга: статус, `best_score`, `best_params` |
 | POST | `/index/rebuild` | Пересобрать индекс из всех треков БД |
@@ -121,6 +122,14 @@ curl -X POST http://localhost:8000/likes -H "X-API-Key: $API_KEY" \
 должен ставить лайки напрямую, иначе любой поставит лайк от чужого имени. Если
 браузер всё же ходит в API сам (например, за рекомендациями), его домены
 перечисляются в `CORS_ORIGINS`.
+
+Для событий плеера backend приложения отправляет `POST /events` с `X-API-Key`.
+Создавайте новый `event_id` на каждое действие и повторяйте его же при сетевом
+ретрае. `impression` записывает показ трека; `play_start`, `progress`, `skip`,
+`complete` и `repeat` — состояние прослушивания (`played_ms`, `duration_ms`).
+Поля `context` (например, `recommendations`, `search`, `playlist`) и `position`
+помогают связать реакцию с местом, где трек был показан. События append-only и
+пока не влияют на ранжирование рекомендаций.
 
 Ограничения: `limit` в рекомендациях — до `api.max_rec_limit` (100), файл при
 загрузке — до `api.max_upload_mb` (50 МБ, иначе 413). `make index-reload` и

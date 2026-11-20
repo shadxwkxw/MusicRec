@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -81,6 +82,26 @@ class LikeORM(Base):
     created_at = Column(DateTime, default=utcnow)
 
     track = relationship("TrackORM", back_populates="likes")
+
+
+class PlaybackEventORM(Base):
+    """Append-only показы и события воспроизведения от клиентского плеера."""
+
+    __tablename__ = "playback_events"
+    __table_args__ = (
+        Index("ix_playback_events_user_created", "user_id", "created_at"),
+        Index("ix_playback_events_track_created", "track_id", "created_at"),
+    )
+
+    event_id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False, index=True)
+    track_id = Column(String, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(String, nullable=False)
+    played_ms = Column(Integer, nullable=False, default=0, server_default="0")
+    duration_ms = Column(Integer, nullable=True)
+    context = Column(String, nullable=True)  # recommendations, search, playlist, album, ...
+    position = Column(Integer, nullable=True)  # позиция в списке рекомендаций, если есть
+    created_at = Column(DateTime, nullable=False, default=utcnow)
 
 
 class AutoMLRunORM(Base):
