@@ -613,9 +613,7 @@ async def get_user_recommendations(
 
 
 @writes.post("/events", response_model=PlaybackEventResponse)
-async def record_playback_event(
-    data: PlaybackEventRequest, db: AsyncSession = Depends(get_db)
-):
+async def record_playback_event(data: PlaybackEventRequest, db: AsyncSession = Depends(get_db)):
     """Записать показ или событие плеера. Повтор с тем же event_id идемпотентен."""
     if await db.get(PlaybackEventORM, str(data.event_id)):
         return PlaybackEventResponse(event_id=data.event_id, status="exists")

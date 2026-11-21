@@ -33,9 +33,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("event_id"),
     )
     op.create_index("ix_playback_events_user_id", "playback_events", ["user_id"])
-    op.create_index(
-        "ix_playback_events_user_created", "playback_events", ["user_id", "created_at"]
-    )
+    op.create_index("ix_playback_events_user_created", "playback_events", ["user_id", "created_at"])
     op.create_index(
         "ix_playback_events_track_created", "playback_events", ["track_id", "created_at"]
     )
